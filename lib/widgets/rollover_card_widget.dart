@@ -99,7 +99,7 @@ class _RolloverCardWidgetState extends State<RolloverCardWidget>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
-            child: [
+            children: [
               Row(
                 children: [
                   Icon(
