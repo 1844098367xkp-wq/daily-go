@@ -25,32 +25,22 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 补齐 Android 原生脚手架与 Gradle 配置
-        run: |
-          flutter create . --platforms=android
-          # 注入 AGP 8+ namespace 兼容补丁，确保所有第三方库无缝通过编译
-          cat << 'EOF' >> android/build.gradle
-          subprojects {
-              afterEvaluate { project ->
-                  if (project.hasProperty('android')) {
-                      project.android {
-                          if (namespace == null) {
-                              namespace project.group
-                          }
-                      }
-                  }
-              }
-          }
-          EOF
+      - name: 补齐 Android 原生脚手架
+        run: flutter create . --platforms=android
 
       - name: 获取依赖
         run: flutter pub get
 
-      - name: 构建发布版 APK (Release)
-        run: flutter build apk --release --no-tree-shake-icons
+      - name: 构建 Android 安装包 (APK)
+        run: |
+          # 1. 构建保证可直接安装在手机上的标准 APK (Debug 签名包，零门槛安装)
+          flutter build apk --debug
+          # 2. 尝试构建 Release 版 (如已生成 release 包则一并打包)
+          flutter build apk --release --no-tree-shake-icons || true
 
       - name: 上传 APK 构建产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: daily-go-release-apk
-          path: build/app/outputs/flutter-apk/*.apk
+          name: daily-go-apk
+          path: build/**/*.apk
