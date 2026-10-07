@@ -25,8 +25,23 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 补齐 Android 原生脚手架
-        run: flutter create . --platforms=android
+      - name: 补齐 Android 原生脚手架与 AGP 8 兼容配置
+        run: |
+          flutter create . --platforms=android
+          # 针对 AGP 8+ 自动补齐第三方插件（如 file_picker 等）缺失的 namespace
+          cat << 'EOF' >> android/build.gradle
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          if (namespace == null) {
+                              namespace = project.group ?: "com.example.${project.name.replaceAll('-', '_')}"
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
 
       - name: 获取依赖
         run: flutter pub get
@@ -35,12 +50,25 @@ jobs:
         run: |
           flutter build apk --debug --verbose > build.log 2>&1 || {
             echo "========== GRADLE BUILD FAILURE DETAILS =========="
-            grep -E "FAILURE|ERROR|Exception|error:|fatal:" build.log -B 2 -A 5 | head -n 100
-            echo "========== LAST 80 LINES OF BUILD LOG =========="
             tail -n 80 build.log
             exit 1
           }
           flutter build apk --release --no-tree-shake-icons || true
+
+      - name: 提取错误并生成 GitHub 批注
+        if: failure()
+        run: |
+          python3 -c "
+          import re
+          try:
+              with open('build.log') as f:
+                  lines = f.readlines()
+              errs = [l.strip() for l in lines if re.search(r'FAILURE|Exception|compileDebug|error:|Execution failed', l)]
+              for e in errs[-10:]:
+                  print(f'::error::{e}')
+          except Exception as ex:
+              print(f'::error::{ex}')
+          "
 
       - name: 上传构建产物 (APK 与构建日志)
         if: always()
