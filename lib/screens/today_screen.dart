@@ -11,11 +11,8 @@ import '../widgets/quick_capture_bottom_sheet.dart';
 import '../widgets/date_timeline_strip.dart';
 import '../widgets/alarm_dialog_widget.dart';
 
-/// 全局日程表主页面 (ScheduleScreen / TodayScreen)
-/// 特性：
-/// 1. 顶部横向日期轴：支持自由定位到任意一天（昨天/今天/明天/未来）查看具体时间安排
-/// 2. 精确时间流：所有安排严格按具体时间点 (HH:mm:ss) 排序展示
-/// 3. 本地强力闹钟调度器：精确秒级触发循环音乐，弹窗要求手动关闭
+/// 全局日程表主页面 (极美高质感重构)
+/// 彻底告别“首页空白”与“生硬图标”，重构沉淀箱为【灵感备忘与成就足迹】
 class TodayScreen extends StatefulWidget {
   final TaskRepository repository;
 
@@ -37,7 +34,6 @@ class _TodayScreenState extends State<TodayScreen> {
   Set<String> _datesWithTasks = {};
   bool _isLoading = true;
 
-  // 闹钟检测定时器 (秒级检测)
   Timer? _alarmCheckTimer;
   final Set<String> _triggeredAlarmTaskIds = {};
 
@@ -57,28 +53,24 @@ class _TodayScreenState extends State<TodayScreen> {
     super.dispose();
   }
 
-  /// 启动本地秒级闹钟守护检测器
   void _startAlarmDaemon() {
     _alarmCheckTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       _checkAndTriggerAlarms();
     });
   }
 
-  /// 检查是否有任务到达设定的具体时刻
   Future<void> _checkAndTriggerAlarms() async {
     final now = DateTime.now();
     final todayStr = TimeParserService.formatDate(now);
     final nowTimeStr = TimeParserService.formatTime(now.hour, now.minute, now.second);
     final nowShortTimeStr = TimeParserService.formatTime(now.hour, now.minute);
 
-    // 仅在真实今天检查闹钟
     for (final task in _currentDateTasks) {
       if (task.targetDate == todayStr &&
           !task.isCompleted &&
           task.hasAlarm &&
           task.timeSlot != null &&
           !_triggeredAlarmTaskIds.contains(task.id)) {
-        // 支持精确到秒 (HH:mm:ss) 或 精确到分 (HH:mm)
         final taskTime = task.timeSlot!;
         final isMatch = (taskTime == nowTimeStr) ||
             (taskTime.length == 5 && nowShortTimeStr == taskTime && now.second == 0);
@@ -92,17 +84,13 @@ class _TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  /// 弹出全屏呼吸闹钟卡片
   void _popAlarmDialog(TaskModel task) {
     if (!mounted) return;
     AlarmDialogWidget.show(
       context,
       task: task,
-      onDismiss: () {
-        // 用户主动点击“关闭提醒”
-      },
+      onDismiss: () {},
       onSnooze: () {
-        // 稍后 5 分钟提醒：5分钟后移除触发缓存
         Timer(const Duration(minutes: 5), () {
           _triggeredAlarmTaskIds.remove(task.id);
         });
@@ -116,8 +104,6 @@ class _TodayScreenState extends State<TodayScreen> {
     final tasks = await widget.repository.getTasksForDate(_selectedDate);
     final yesterdayPending = await widget.repository.getUnfinishedTasksBeforeDate(_realTodayStr);
 
-    // 扫描有任务的日期标记
-    final allUpcoming = await widget.repository.getTasksForDate(_selectedDate);
     final datesSet = <String>{_selectedDate};
     if (yesterdayPending.isNotEmpty) {
       datesSet.add(yesterdayPending.first.targetDate);
@@ -139,7 +125,6 @@ class _TodayScreenState extends State<TodayScreen> {
     _loadData();
   }
 
-  /// 晨间一键顺延昨日未完成项至今天
   Future<void> _handleBatchPostpone() async {
     await widget.repository.batchPostponeYesterdayTasks(
       beforeDate: _realTodayStr,
@@ -148,13 +133,11 @@ class _TodayScreenState extends State<TodayScreen> {
     await _loadData();
   }
 
-  /// 晨间一键将昨日余项移入沉淀箱
   Future<void> _handleBatchArchive() async {
     await widget.repository.batchArchiveYesterdayTasks(_realTodayStr);
     await _loadData();
   }
 
-  /// 新建任务落库 (支持精确年月日时分秒、强闹钟与自定义音乐)
   Future<void> _handleCreateTask(
     String title,
     String targetDate,
@@ -179,11 +162,9 @@ class _TodayScreenState extends State<TodayScreen> {
 
     await widget.repository.createTask(newTask);
 
-    // 如果创建的日期正是当前浏览的日期，刷新视图
     if (targetDate == _selectedDate) {
       await _loadData();
     } else {
-      // 切换到所创建日期的日程表
       setState(() => _selectedDate = targetDate);
       await _loadData();
     }
@@ -197,7 +178,6 @@ class _TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  /// 单任务顺延至明天
   Future<void> _handlePostponeToTomorrow(String taskId) async {
     final tomorrow = DateTime.now().add(const Duration(days: 1));
     final tomorrowStr = TimeParserService.formatDate(tomorrow);
@@ -205,7 +185,6 @@ class _TodayScreenState extends State<TodayScreen> {
     await _loadData();
   }
 
-  /// 单任务移入沉淀箱
   Future<void> _handleArchiveSingle(String taskId) async {
     final task = _currentDateTasks.firstWhere((t) => t.id == taskId);
     await widget.repository.updateTask(task.copyWith(
@@ -225,7 +204,9 @@ class _TodayScreenState extends State<TodayScreen> {
 
     final timedTasks = _currentDateTasks.where((t) => t.hasSpecificTime).toList();
     final anytimeTasks = _currentDateTasks.where((t) => !t.hasSpecificTime).toList();
-    final activeCount = _currentDateTasks.where((t) => !t.isCompleted).length;
+    final totalCount = _currentDateTasks.length;
+    final completedCount = _currentDateTasks.where((t) => t.isCompleted).length;
+    final activeCount = totalCount - completedCount;
     final isViewingToday = _selectedDate == _realTodayStr;
 
     return Scaffold(
@@ -240,7 +221,7 @@ class _TodayScreenState extends State<TodayScreen> {
               datesWithTasks: _datesWithTasks,
             ),
 
-            // 2. 所选日期标题栏
+            // 2. 状态主头部栏：日期、回到今天与重塑后的【灵感备忘箱】
             Padding(
               padding: const EdgeInsets.only(
                 left: AppTheme.spacing20,
@@ -250,71 +231,85 @@ class _TodayScreenState extends State<TodayScreen> {
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Text(
-                            _formatSelectedDisplayDate(_selectedDate),
-                            style: TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: -0.5,
-                              color: primaryTextColor,
+                      Text(
+                        _formatSelectedDisplayDate(_selectedDate),
+                        style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.4,
+                          color: primaryTextColor,
+                        ),
+                      ),
+                      if (!isViewingToday) ...[
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: () => _handleDateChanged(_realTodayStr),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
+                            decoration: BoxDecoration(
+                              color: primaryColor.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                          ),
-                          if (!isViewingToday) ...[
-                            const SizedBox(width: 8),
-                            GestureDetector(
-                              onTap: () => _handleDateChanged(_realTodayStr),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(
-                                  color: primaryColor.withOpacity(0.12),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  '回到今天',
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.arrow_back_rounded, size: 12, color: primaryColor),
+                                const SizedBox(width: 2),
+                                Text(
+                                  '今天',
                                   style: TextStyle(
                                     fontSize: 11,
                                     fontWeight: FontWeight.w600,
                                     color: primaryColor,
                                   ),
                                 ),
-                              ),
+                              ],
                             ),
-                          ],
-                        ],
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        activeCount > 0 ? '该日已规划 $activeCount 项待办' : '该日事项已全部搞定',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w400,
-                          color: secondaryTextColor,
+                          ),
                         ),
-                      ),
+                      ],
                     ],
                   ),
-                  // 沉淀箱入口小按钮
-                  IconButton(
-                    onPressed: () => _openArchivedSheet(context),
-                    icon: Icon(
-                      Icons.inventory_2_outlined,
-                      size: 22,
-                      color: secondaryTextColor,
+
+                  // 焕新图标：灵感备忘箱入口 (带紫罗兰优雅微底色)
+                  GestureDetector(
+                    onTap: () => _openIdeaInboxSheet(context),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isDark ? AppTheme.badgeIdeaBgDark : AppTheme.badgeIdeaBgLight,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.lightbulb_rounded,
+                            size: 16,
+                            color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            '灵感箱',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                    tooltip: '沉淀箱',
                   ),
                 ],
               ),
             ),
 
-            // 3. 核心任务流展示区 (按具体时间精确排序)
+            // 3. 核心流展示区
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator.adaptive())
@@ -326,7 +321,16 @@ class _TodayScreenState extends State<TodayScreen> {
                         ),
                         padding: const EdgeInsets.only(bottom: 80),
                         children: [
-                          // 仅在查看“今天”时展示晨间结算卡片
+                          // 3.1 今日心流节奏看板 (彻底击碎空白感)
+                          _buildRhythmCard(
+                            isDark,
+                            totalCount,
+                            completedCount,
+                            activeCount,
+                            isViewingToday,
+                          ),
+
+                          // 3.2 晨间温和结算卡片
                           if (isViewingToday && _yesterdayPendingTasks.isNotEmpty)
                             RolloverCardWidget(
                               pendingCount: _yesterdayPendingTasks.length,
@@ -334,21 +338,29 @@ class _TodayScreenState extends State<TodayScreen> {
                               onBatchArchive: _handleBatchArchive,
                             ),
 
-                          // 空状态视图
+                          // 3.3 空状态或时间流列表
                           if (_currentDateTasks.isEmpty)
-                            _buildEmptyState(isDark)
+                            _buildAestheticEmptyState(isDark)
                           else ...[
-                            // 分组 1: 具体时钟点 (按精确时间由早到晚展示)
+                            // 分组 1: 具体时钟点 (带左侧垂直时间轴光柱连接线)
                             if (timedTasks.isNotEmpty) ...[
-                              _buildSectionTitle('具体时间安排', secondaryTextColor),
-                              _buildTaskGroup(timedTasks, cardColor),
-                              const SizedBox(height: AppTheme.spacing16),
+                              _buildTimelineSectionHeader(
+                                '精确时刻安排 (${timedTasks.length})',
+                                Icons.access_time_filled_rounded,
+                                isDark ? AppTheme.badgeTimeDark : AppTheme.badgeTimeLight,
+                              ),
+                              _buildTaskGroup(timedTasks, cardColor, isDark),
+                              const SizedBox(height: AppTheme.spacing20),
                             ],
 
-                            // 分组 2: 随时处理 (无具体时钟点)
+                            // 分组 2: 随时处理 (无具体时间)
                             if (anytimeTasks.isNotEmpty) ...[
-                              _buildSectionTitle('全天 / 随时处理', secondaryTextColor),
-                              _buildTaskGroup(anytimeTasks, cardColor),
+                              _buildTimelineSectionHeader(
+                                '全天 / 随时从容推进 (${anytimeTasks.length})',
+                                Icons.all_inclusive_rounded,
+                                isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                              ),
+                              _buildTaskGroup(anytimeTasks, cardColor, isDark),
                             ],
                           ],
                         ],
@@ -356,7 +368,7 @@ class _TodayScreenState extends State<TodayScreen> {
                     ),
             ),
 
-            // 4. 底部录入唤起栏 (点击打开支持智能提取与年月日时分秒的弹窗)
+            // 4. 底部微质感录入悬浮唤起栏
             _buildBottomCaptureBar(context, isDark),
           ],
         ),
@@ -364,30 +376,133 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  Widget _buildSectionTitle(String title, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(
+  /// 今日心流节奏微看板卡片 (视觉重心，告别空白)
+  Widget _buildRhythmCard(
+    bool isDark,
+    int total,
+    int completed,
+    int active,
+    bool isToday,
+  ) {
+    final progress = total > 0 ? (completed / total) : 0.0;
+    final greeting = _getGreetingMessage();
+    final primaryColor = isDark ? AppTheme.primaryDark : AppTheme.primaryLight;
+    final cardBg = isDark ? const Color(0xFF131B2E) : Colors.white;
+
+    return Container(
+      margin: const EdgeInsets.only(
         left: AppTheme.spacing20,
-        bottom: AppTheme.spacing8,
+        right: AppTheme.spacing20,
+        top: 4,
+        bottom: 16,
       ),
-      child: Text(
-        title.toUpperCase(),
-        style: TextStyle(
-          fontSize: 12,
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.5,
-          color: color,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        boxShadow: AppTheme.cardShadow(isDark),
+        border: Border.all(
+          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+          width: 1,
         ),
+      ),
+      child: Row(
+        children: [
+          // 环形进度圈
+          SizedBox(
+            width: 48,
+            height: 48,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CircularProgressIndicator(
+                  value: progress,
+                  strokeWidth: 4.5,
+                  backgroundColor: isDark ? const Color(0xFF1E293B) : const Color(0xFFE2E8F0),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    progress == 1.0
+                        ? (isDark ? AppTheme.badgeSuccessDark : AppTheme.badgeSuccessLight)
+                        : primaryColor,
+                  ),
+                ),
+                Text(
+                  total > 0 ? '${(progress * 100).toInt()}%' : '0%',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isToday ? greeting : '规划日程',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? Colors.white : const Color(0xFF0F172A),
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  total > 0
+                      ? '已完成 $completed 项 · 尚余 $active 项待专注'
+                      : '从容无待办，正是开启新专注的时刻',
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: AppTheme.textSecondaryLight,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildTaskGroup(List<TaskModel> tasks, Color cardColor) {
+  Widget _buildTimelineSectionHeader(String title, IconData icon, Color iconColor) {
+    return Padding(
+      padding: const EdgeInsets.only(
+        left: AppTheme.spacing20,
+        right: AppTheme.spacing20,
+        bottom: 10,
+      ),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: iconColor),
+          const SizedBox(width: 6),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.2,
+              color: AppTheme.textSecondaryLight,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTaskGroup(List<TaskModel> tasks, Color cardColor, bool isDark) {
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: AppTheme.spacing20),
       decoration: BoxDecoration(
         color: cardColor,
         borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+        boxShadow: AppTheme.cardShadow(isDark),
+        border: Border.all(
+          color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+          width: 1,
+        ),
       ),
       clipBehavior: Clip.antiAlias,
       child: Column(
@@ -403,8 +518,8 @@ class _TodayScreenState extends State<TodayScreen> {
               Divider(
                 height: 0.5,
                 thickness: 0.5,
-                indent: 46,
-                color: Theme.of(context).dividerColor,
+                indent: 52,
+                color: Theme.of(context).dividerColor.withOpacity(0.4),
               ),
           ],
         ],
@@ -413,23 +528,24 @@ class _TodayScreenState extends State<TodayScreen> {
   }
 
   Widget _buildBottomCaptureBar(BuildContext context, bool isDark) {
-    final barBg = isDark ? const Color(0xFF1C1C1E) : Colors.white;
+    final barBg = isDark ? const Color(0xFF131B2E) : Colors.white;
     final hintColor = isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight;
     final primaryColor = isDark ? AppTheme.primaryDark : AppTheme.primaryLight;
 
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: AppTheme.spacing20,
-        vertical: AppTheme.spacing12,
+        vertical: 12,
       ),
       decoration: BoxDecoration(
         color: barBg,
-        border: Border(
-          top: BorderSide(
-            color: Theme.of(context).dividerColor,
-            width: 0.5,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(isDark ? 0.3 : 0.04),
+            blurRadius: 16,
+            offset: const Offset(0, -4),
           ),
-        ),
+        ],
       ),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
@@ -441,35 +557,91 @@ class _TodayScreenState extends State<TodayScreen> {
           );
         },
         child: Container(
-          height: 44,
+          height: 48,
           padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacing16),
           decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7),
-            borderRadius: BorderRadius.circular(22),
+            color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF8FAFC),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(
+              color: isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
+              width: 1,
+            ),
           ),
           child: Row(
             children: [
-              Icon(
-                Icons.add_rounded,
-                size: 20,
-                color: primaryColor,
+              Container(
+                padding: const EdgeInsets.all(5),
+                decoration: BoxDecoration(
+                  color: primaryColor,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.add_rounded, size: 16, color: Colors.white),
               ),
-              const SizedBox(width: AppTheme.spacing8),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  '添加安排，支持智能识别或精确到时分秒...',
+                  '随时随心记录 · 支持智能提取与精准时分秒',
                   style: TextStyle(
-                    fontSize: 14,
+                    fontSize: 13.5,
                     color: hintColor,
                     fontWeight: FontWeight.w400,
                   ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
-              Icon(
-                Icons.tune_rounded,
-                size: 16,
-                color: primaryColor,
+              Icon(Icons.tune_rounded, size: 18, color: primaryColor),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAestheticEmptyState(bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 30),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 24),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF131B2E).withOpacity(0.5) : Colors.white.withOpacity(0.8),
+            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+            border: Border.all(
+              color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: (isDark ? AppTheme.primaryDark : AppTheme.primaryLight).withOpacity(0.1),
+                ),
+                child: Icon(
+                  Icons.spa_rounded,
+                  size: 36,
+                  color: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '该日暂无安排 · 心流从容',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                '所有精彩都始于当下。点击底部栏，随手记下第一条计划或精确闹钟。',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.4,
+                  color: AppTheme.textSecondaryLight,
+                ),
               ),
             ],
           ),
@@ -478,41 +650,8 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  Widget _buildEmptyState(bool isDark) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 80),
-      child: Center(
-        child: Column(
-          children: [
-            Icon(
-              Icons.event_available_rounded,
-              size: 48,
-              color: isDark ? const Color(0xFF38383A) : const Color(0xFFE5E5EA),
-            ),
-            const SizedBox(height: AppTheme.spacing12),
-            Text(
-              '该日期暂无日程安排',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
-                color: AppTheme.textSecondaryLight,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '点击下方栏目快速添加，可设置精确到秒的强闹钟',
-              style: TextStyle(
-                fontSize: 13,
-                color: isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _openArchivedSheet(BuildContext context) async {
+  /// 重塑后的【灵感备忘箱 (Inbox & 历史回顾)】
+  void _openIdeaInboxSheet(BuildContext context) async {
     final archived = await widget.repository.getArchivedTasks();
     if (!mounted) return;
 
@@ -522,57 +661,136 @@ class _TodayScreenState extends State<TodayScreen> {
       backgroundColor: Colors.transparent,
       builder: (ctx) {
         final isDark = Theme.of(ctx).brightness == Brightness.dark;
+        final sheetBg = isDark ? AppTheme.sheetDark : Colors.white;
+        final textColor = isDark ? Colors.white : const Color(0xFF0F172A);
+
         return Container(
-          height: MediaQuery.of(ctx).size.height * 0.7,
+          height: MediaQuery.of(ctx).size.height * 0.72,
           decoration: BoxDecoration(
-            color: isDark ? AppTheme.sheetDark : AppTheme.sheetLight,
+            color: sheetBg,
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(AppTheme.radiusLarge),
               topRight: Radius.circular(AppTheme.radiusLarge),
             ),
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 12),
-              Container(
-                width: 36,
-                height: 5,
-                decoration: BoxDecoration(
-                  color: isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight,
-                  borderRadius: BorderRadius.circular(2.5),
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 5,
+                  decoration: BoxDecoration(
+                    color: isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight,
+                    borderRadius: BorderRadius.circular(2.5),
+                  ),
                 ),
               ),
-              const SizedBox(height: 16),
-              Text(
-                '沉淀箱 (稍后处理与归档)',
-                style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                  color: isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight,
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: isDark ? AppTheme.badgeIdeaBgDark : AppTheme.badgeIdeaBgLight,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.lightbulb_rounded,
+                        size: 20,
+                        color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '灵感备忘箱 (待定池)',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: textColor,
+                          ),
+                        ),
+                        Text(
+                          '存放暂未想好具体日期的灵感，或多日未执行自动沉淀的事项',
+                          style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryLight),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
+              Divider(height: 1, color: Theme.of(ctx).dividerColor),
               Expanded(
                 child: archived.isEmpty
-                    ? const Center(child: Text('暂无沉淀任务', style: TextStyle(color: Colors.grey)))
-                    : ListView.builder(
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.inbox_rounded, size: 40, color: AppTheme.textSecondaryLight.withOpacity(0.5)),
+                            const SizedBox(height: 8),
+                            Text('灵感箱空空如也', style: TextStyle(color: AppTheme.textSecondaryLight, fontSize: 14)),
+                          ],
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(16),
                         itemCount: archived.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (c, idx) {
                           final t = archived[idx];
-                          return ListTile(
-                            title: Text(t.title, style: const TextStyle(fontSize: 15)),
-                            subtitle: Text('原计划: ${t.targetDate} ${t.timeSlot ?? ''} · 顺延 ${t.rolloverCount} 次',
-                                style: const TextStyle(fontSize: 12)),
-                            trailing: TextButton(
-                              onPressed: () async {
-                                await widget.repository.updateTask(t.copyWith(
-                                  targetDate: _selectedDate,
-                                  status: TaskStatus.todo,
-                                ));
-                                Navigator.pop(ctx);
-                                _loadData();
-                              },
-                              child: const Text('移至该日'),
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: isDark ? const Color(0xFF131B2E) : const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        t.title,
+                                        style: TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w500,
+                                          color: textColor,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 3),
+                                      Text(
+                                        '源自: ${t.targetDate} · 顺延 ${t.rolloverCount} 次',
+                                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryLight),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                ElevatedButton(
+                                  onPressed: () async {
+                                    await widget.repository.updateTask(t.copyWith(
+                                      targetDate: _selectedDate,
+                                      status: TaskStatus.todo,
+                                    ));
+                                    Navigator.pop(ctx);
+                                    _loadData();
+                                  },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
+                                    foregroundColor: Colors.white,
+                                    elevation: 0,
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                    minimumSize: const Size(0, 32),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                                  ),
+                                  child: const Text('排入该日', style: TextStyle(fontSize: 12)),
+                                ),
+                              ],
                             ),
                           );
                         },
@@ -593,9 +811,18 @@ class _TodayScreenState extends State<TodayScreen> {
       final m = dt.month;
       final d = dt.day;
       final w = weekdays[dt.weekday - 1];
-      return '$m月$d日 星期$w';
+      return '$m月$d日 周$w';
     } catch (_) {
       return dateStr;
     }
+  }
+
+  String _getGreetingMessage() {
+    final hour = DateTime.now().hour;
+    if (hour < 9) return '🌅 清晨心流 · 开启今天';
+    if (hour < 12) return '☀️ 上午专注 · 全力推进';
+    if (hour < 14) return '☕ 午间轻歇 · 从容节奏';
+    if (hour < 18) return '💼 午后心流 · 稳步达成';
+    return '🌙 晚间复盘 · 享受从容';
   }
 }

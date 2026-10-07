@@ -5,12 +5,11 @@ import '../theme/app_theme.dart';
 import '../services/sound_haptic_service.dart';
 
 /// 任务单项组件 (TaskItemWidget)
-/// 严格还原 Things 3 微交互：
-/// 1. 22pt 圆形 Checkbox 微弹动
-/// 2. 划线并置灰变淡
-/// 3. 650ms 黄金驻留窗口（允许反悔撤销）
-/// 4. 240ms 平滑高度坍缩折叠
-/// 5. 双向滑动手势（右滑完成，左滑顺延/归档）
+/// 顶级精美度重构：
+/// 1. 22pt 圆形 Checkbox 微弹动与触感
+/// 2. 划线并置灰
+/// 3. 650ms 黄金驻留撤销窗口 + 240ms 高度平滑坍缩
+/// 4. 精美语义彩色微徽标 (时钟徽标、强闹钟金标、本地音乐绿标)
 class TaskItemWidget extends StatefulWidget {
   final TaskModel task;
   final ValueChanged<bool> onToggleComplete;
@@ -60,7 +59,7 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
       curve: Curves.easeOut,
     );
 
-    _collapseController.value = 1.0; // 默认展开状态
+    _collapseController.value = 1.0;
   }
 
   @override
@@ -80,23 +79,18 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
     super.dispose();
   }
 
-  /// 点击 Checkbox 的 650ms 驻留与撤销控制
   void _handleCheckboxTap() {
     if (_isOptimisticCompleted) {
-      // 用户在驻留期内反悔：撤销倒计时，还原状态
       _dwellTimer?.cancel();
       setState(() => _isOptimisticCompleted = false);
       SoundHapticService.instance.playTaskCreated();
       widget.onToggleComplete(false);
     } else {
-      // 标记完成：播放声音与中等触感
       setState(() => _isOptimisticCompleted = true);
       SoundHapticService.instance.playTaskCompleted();
 
-      // 650ms 黄金驻留时延
       _dwellTimer = Timer(const Duration(milliseconds: 650), () {
         if (!mounted) return;
-        // 延时结束：执行平滑坍缩折叠
         _collapseController.reverse().then((_) {
           if (mounted) {
             widget.onToggleComplete(true);
@@ -109,9 +103,7 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final primaryTextColor = isDark
-        ? AppTheme.textPrimaryDark
-        : AppTheme.textPrimaryLight;
+    final primaryTextColor = isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight;
     final secondaryTextColor = AppTheme.textSecondaryLight;
     final cardColor = isDark ? AppTheme.cardDark : AppTheme.cardLight;
 
@@ -121,39 +113,32 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
         opacity: _fadeAnimation,
         child: Dismissible(
           key: ValueKey(widget.task.id),
-          // 右滑完成，左滑推迟
           confirmDismiss: (direction) async {
             if (direction == DismissDirection.startToEnd) {
-              // 右滑：完成
               SoundHapticService.instance.playTaskCompleted();
               widget.onToggleComplete(true);
               return true;
             } else if (direction == DismissDirection.endToStart) {
-              // 左滑：快速顺延至明天
               SoundHapticService.instance.playTaskDeleted();
               widget.onPostpone();
               return true;
             }
             return false;
           },
-          // 右滑背景：柔和翠绿
           background: Container(
             alignment: Alignment.centerLeft,
             padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacing20),
             color: isDark ? AppTheme.statusSuccessDark : AppTheme.statusSuccessLight,
-            child: const Icon(Icons.check_rounded, color: Colors.white, size: 24),
+            child: const Icon(Icons.check_circle_rounded, color: Colors.white, size: 24),
           ),
-          // 左滑背景：暖砂琥珀顺延
           secondaryBackground: Container(
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacing20),
-            color: isDark
-                ? AppTheme.statusPostponedDark
-                : AppTheme.statusPostponedLight,
+            color: isDark ? AppTheme.statusPostponedDark : AppTheme.statusPostponedLight,
             child: const Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Icon(Icons.schedule_send_rounded, color: Colors.white, size: 22),
+                Icon(Icons.next_plan_rounded, color: Colors.white, size: 22),
                 SizedBox(width: 6),
                 Text(
                   '顺延至明天',
@@ -169,16 +154,16 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
           child: InkWell(
             onTap: widget.onTap,
             child: Container(
-              constraints: const BoxConstraints(minHeight: 52.0),
+              constraints: const BoxConstraints(minHeight: 56.0),
               padding: const EdgeInsets.symmetric(
-                horizontal: AppTheme.spacing20,
-                vertical: AppTheme.spacing12,
+                horizontal: AppTheme.spacing16,
+                vertical: 12,
               ),
               color: cardColor,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // 1. 22pt 圆形 Checkbox 交互靶心 (扩大触摸热区至 44pt)
+                  // 1. 精致 Checkbox (触控热区)
                   GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: _handleCheckboxTap,
@@ -193,45 +178,38 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: _isOptimisticCompleted
-                              ? (isDark
-                                  ? AppTheme.statusSuccessDark
-                                  : AppTheme.statusSuccessLight)
+                              ? (isDark ? AppTheme.statusSuccessDark : AppTheme.statusSuccessLight)
                               : Colors.transparent,
                           border: Border.all(
                             color: _isOptimisticCompleted
                                 ? Colors.transparent
-                                : (isDark
-                                    ? AppTheme.textPlaceholderDark
-                                    : AppTheme.textPlaceholderLight),
-                            width: 1.5,
+                                : (isDark ? const Color(0xFF475569) : const Color(0xFFCBD5E1)),
+                            width: 1.8,
                           ),
                         ),
                         child: _isOptimisticCompleted
-                            ? const Icon(
-                                Icons.check_rounded,
-                                size: 15,
-                                color: Colors.white,
-                              )
+                            ? const Icon(Icons.check_rounded, size: 15, color: Colors.white)
                             : null,
                       ),
                     ),
                   ),
-                  const SizedBox(width: AppTheme.spacing8),
+                  const SizedBox(width: 8),
 
-                  // 2. 任务标题（带 180ms 划线置灰过渡）
+                  // 2. 任务标题文本
                   Expanded(
                     child: AnimatedDefaultTextStyle(
                       duration: const Duration(milliseconds: 180),
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w500,
                         height: 1.35,
                         color: _isOptimisticCompleted
-                            ? secondaryTextColor.withOpacity(0.4)
+                            ? secondaryTextColor.withOpacity(0.35)
                             : primaryTextColor,
                         decoration: _isOptimisticCompleted
                             ? TextDecoration.lineThrough
                             : TextDecoration.none,
-                        decorationColor: secondaryTextColor.withOpacity(0.5),
+                        decorationColor: secondaryTextColor.withOpacity(0.4),
                       ),
                       child: Text(
                         widget.task.title,
@@ -241,42 +219,68 @@ class _TaskItemWidgetState extends State<TaskItemWidget>
                     ),
                   ),
 
-                  // 3. 时间标签胶囊 (如有定时)
+                  // 3. 精致时钟与闹钟胶囊徽标
                   if (widget.task.hasSpecificTime) ...[
-                    const SizedBox(width: AppTheme.spacing8),
+                    const SizedBox(width: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 2,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
                       decoration: BoxDecoration(
-                        color: isDark
-                            ? AppTheme.primaryTintDark
-                            : AppTheme.primaryTintLight,
-                        borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
+                        color: isDark ? AppTheme.badgeTimeBgDark : AppTheme.badgeTimeBgLight,
+                        borderRadius: BorderRadius.circular(10),
                       ),
-                      child: Text(
-                        widget.task.timeSlot!,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: isDark
-                              ? AppTheme.primaryDark
-                              : AppTheme.primaryLight,
-                        ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.schedule_rounded,
+                            size: 13,
+                            color: isDark ? AppTheme.badgeTimeDark : AppTheme.badgeTimeLight,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            widget.task.timeSlot!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: isDark ? AppTheme.badgeTimeDark : AppTheme.badgeTimeLight,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
 
-                  // 4. 顺延疲劳度微标记 (>=3次顺延)
-                  if (widget.task.isHighFatigue && !_isOptimisticCompleted) ...[
+                  // 4. 强力闹钟金标 (金色呼吸徽标)
+                  if (widget.task.hasAlarm && !_isOptimisticCompleted) ...[
                     const SizedBox(width: 6),
-                    Icon(
-                      Icons.repeat_rounded,
-                      size: 14,
-                      color: isDark
-                          ? AppTheme.statusPostponedDark
-                          : AppTheme.statusPostponedLight,
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: isDark ? AppTheme.badgeAlarmBgDark : AppTheme.badgeAlarmBgLight,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.notifications_active_rounded,
+                        size: 13,
+                        color: isDark ? AppTheme.badgeAlarmDark : AppTheme.badgeAlarmLight,
+                      ),
+                    ),
+                  ],
+
+                  // 5. 本地自定义音乐标
+                  if (widget.task.customSoundPath != null && !_isOptimisticCompleted) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: BoxDecoration(
+                        color: isDark ? AppTheme.badgeSuccessBgDark : AppTheme.badgeSuccessBgLight,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.music_note_rounded,
+                        size: 12,
+                        color: isDark ? AppTheme.badgeSuccessDark : AppTheme.badgeSuccessLight,
+                      ),
                     ),
                   ],
                 ],
