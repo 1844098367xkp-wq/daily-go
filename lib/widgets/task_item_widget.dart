@@ -16,6 +16,7 @@ class TaskItemWidget extends StatefulWidget {
   final ValueChanged<bool> onToggleComplete;
   final ValueChanged<bool> onTogglePause;
   final VoidCallback onDelete;
+  final ValueChanged<int>? onSwipeDateShift;
   final VoidCallback? onTap;
 
   const TaskItemWidget({
@@ -24,6 +25,7 @@ class TaskItemWidget extends StatefulWidget {
     required this.onToggleComplete,
     required this.onTogglePause,
     required this.onDelete,
+    this.onSwipeDateShift,
     this.onTap,
   });
 
@@ -249,7 +251,7 @@ class _TaskItemWidgetState extends State<TaskItemWidget> {
         ? 0.35
         : (widget.task.isCompleted ? 0.65 : 1.0);
 
-    return Opacity(
+    final itemContent = Opacity(
       opacity: itemOpacity,
       child: InkWell(
         onTap: () {
@@ -428,6 +430,62 @@ class _TaskItemWidgetState extends State<TaskItemWidget> {
           ),
         ),
       ),
+    );
+
+    if (widget.onSwipeDateShift == null) {
+      return itemContent;
+    }
+
+    // 左右滑动手势：右滑顺延至明天(+1)，左滑提前至昨天(-1)
+    return Dismissible(
+      key: Key('task_dismiss_${widget.task.id}_${widget.task.targetDate}_${widget.task.updatedAt}'),
+      direction: DismissDirection.horizontal,
+      background: Container(
+        color: const Color(0xFF059669), // 翠绿背景
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Row(
+          children: [
+            const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              widget.task.isCompleted ? '复制至明天 (+1天)' : '顺延至明天 (+1天)',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13.5),
+            ),
+          ],
+        ),
+      ),
+      secondaryBackground: Container(
+        color: const Color(0xFF2563EB), // 蓝色背景
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            Text(
+              widget.task.isCompleted ? '复制至昨天 (-1天)' : '提前至昨天 (-1天)',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13.5),
+            ),
+            const SizedBox(width: 8),
+            const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 20),
+          ],
+        ),
+      ),
+      confirmDismiss: (direction) async {
+        if (direction == DismissDirection.startToEnd) {
+          // 右滑 -> 顺延/复制至明天 (+1)
+          SoundHapticService.instance.playSelectionClick();
+          widget.onSwipeDateShift?.call(1);
+          return true;
+        } else if (direction == DismissDirection.endToStart) {
+          // 左滑 -> 提前/复制至昨天 (-1)
+          SoundHapticService.instance.playSelectionClick();
+          widget.onSwipeDateShift?.call(-1);
+          return true;
+        }
+        return false;
+      },
+      child: itemContent,
     );
   }
 }

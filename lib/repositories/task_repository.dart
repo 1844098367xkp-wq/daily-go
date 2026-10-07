@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:sqflite/sqflite.dart';
+import 'package:uuid/uuid.dart';
 import '../database/database_helper.dart';
 import '../models/task_model.dart';
 
@@ -20,6 +21,10 @@ abstract class ITaskRepository {
   Future<List<TaskModel>> getArchivedTasks();
   Future<String> exportTasksAsJson();
   Future<int> importTasksFromJson(String jsonStr);
+  Future<String> shiftTaskDate(TaskModel task, int dayDelta);
+  Future<Set<String>> getAllDatesWithTasks();
+  Future<String?> getCustomBackground();
+  Future<void> setCustomBackground(String? path);
 }
 
 /// 任务管理仓储层核心实现 (Local-First 数据层)
@@ -291,5 +296,71 @@ class TaskRepository implements ITaskRepository {
       }
       return imported;
     });
+  }
+
+  /// 13. 单项任务左右滑动移位/顺延复制逻辑
+  /// - 若该安排在原日期是已完成状态：原日期保留，在目标日期复制创建相同安排 (TODO)
+  /// - 若为未完成/已暂停：直接将原安排顺延/前移至目标日期
+  @override
+  Future<String> shiftTaskDate(TaskModel task, int dayDelta) async {
+    final parts = task.targetDate.split('-');
+    final currentDt = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+    final targetDt = currentDt.add(Duration(days: dayDelta));
+    final newTargetDate = '${targetDt.year.toString().padLeft(4, '0')}-${targetDt.month.toString().padLeft(2, '0')}-${targetDt.day.toString().padLeft(2, '0')}';
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    if (task.isCompleted) {
+      // 原任务保留不变，在目标日期新建相同安排
+      final clone = TaskModel(
+        id: const Uuid().v4(),
+        title: task.title,
+        rawInput: task.rawInput,
+        targetDate: newTargetDate,
+        timeSlot: task.timeSlot,
+        status: TaskStatus.todo,
+        priority: task.priority,
+        recurrenceRule: task.recurrenceRule,
+        sortOrder: task.sortOrder,
+        rolloverCount: 0,
+        hasAlarm: task.hasAlarm,
+        customSoundPath: task.customSoundPath,
+        createdAt: now,
+        updatedAt: now,
+      );
+      await createTask(clone);
+    } else {
+      // 未完成/已暂停：直接转移至目标日期
+      final updated = task.copyWith(
+        targetDate: newTargetDate,
+        status: task.status == TaskStatus.paused ? TaskStatus.todo : task.status,
+        updatedAt: now,
+      );
+      await updateTask(updated);
+    }
+
+    return newTargetDate;
+  }
+
+  /// 14. 获取所有包含任务的日期集合 (用于宏观日历标记)
+  @override
+  Future<Set<String>> getAllDatesWithTasks() async {
+    final db = await _dbHelper.database;
+    final List<Map<String, dynamic>> res = await db.rawQuery(
+      'SELECT DISTINCT target_date FROM ${DatabaseHelper.tableName} WHERE status != ?',
+      [TaskStatus.archived.value],
+    );
+    return res.map((r) => r['target_date'] as String).toSet();
+  }
+
+  /// 15. 读取自定义背景图片路径
+  @override
+  Future<String?> getCustomBackground() async {
+    return await _dbHelper.getSetting('custom_bg_path');
+  }
+
+  /// 16. 保存自定义背景图片路径
+  @override
+  Future<void> setCustomBackground(String? path) async {
+    await _dbHelper.setSetting('custom_bg_path', path);
   }
 }

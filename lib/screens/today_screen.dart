@@ -1,15 +1,19 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:uuid/uuid.dart';
 import '../models/task_model.dart';
 import '../repositories/task_repository.dart';
 import '../services/time_parser_service.dart';
+import '../services/sound_haptic_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/task_item_widget.dart';
 import '../widgets/rollover_card_widget.dart';
 import '../widgets/quick_capture_bottom_sheet.dart';
 import '../widgets/date_timeline_strip.dart';
 import '../widgets/alarm_dialog_widget.dart';
+import '../widgets/macro_calendar_dialog.dart';
 import 'idea_inbox_screen.dart';
 
 /// 全局日程表主页面 (极美高质感重构)
@@ -38,14 +42,24 @@ class _TodayScreenState extends State<TodayScreen> {
   Timer? _alarmCheckTimer;
   final Set<String> _triggeredAlarmTaskIds = {};
 
+  String? _customBgPath;
+
   @override
   void initState() {
     super.initState();
     _realTodayStr = TimeParserService.formatDate(DateTime.now());
     _selectedDate = _realTodayStr;
 
+    _loadBackgroundPreference();
     _loadData();
     _startAlarmDaemon();
+  }
+
+  Future<void> _loadBackgroundPreference() async {
+    final bg = await widget.repository.getCustomBackground();
+    if (mounted) {
+      setState(() => _customBgPath = bg);
+    }
   }
 
   @override
@@ -104,8 +118,9 @@ class _TodayScreenState extends State<TodayScreen> {
 
     final tasks = await widget.repository.getTasksForDate(_selectedDate);
     final yesterdayPending = await widget.repository.getUnfinishedTasksBeforeDate(_realTodayStr);
+    final allDatesWithTasks = await widget.repository.getAllDatesWithTasks();
 
-    final datesSet = <String>{_selectedDate};
+    final datesSet = <String>{_selectedDate, ...allDatesWithTasks};
     if (yesterdayPending.isNotEmpty) {
       datesSet.add(yesterdayPending.first.targetDate);
     }
@@ -207,6 +222,165 @@ class _TodayScreenState extends State<TodayScreen> {
     await _loadData();
   }
 
+  /// 单项日程左右滑动移位/顺延复制逻辑
+  /// - 右滑(+1天) / 左滑(-1天)
+  /// - 若原任务为已完成：保留原日期历史，在目标日期复制生成相同安排 (TODO)
+  /// - 若为未完成/已暂停：直接将安排顺延/前移至目标日期
+  /// - 执行后联动直接跳转到目标日期，展示当天的所有安排！
+  Future<void> _handleTaskSwipeShift(TaskModel task, int dayDelta) async {
+    final newTargetDate = await widget.repository.shiftTaskDate(task, dayDelta);
+    setState(() => _selectedDate = newTargetDate);
+    await _loadData();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            task.isCompleted
+                ? '✓ 已保留原完成记录，并成功复制相同安排至 $newTargetDate'
+                : '✓ 已顺延安排至 $newTargetDate 并完成跳转',
+          ),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// 唤起宏观多维日历穿梭矩阵 (年视图 -> 月视图 -> 日视图自由选日)
+  Future<void> _openMacroCalendar() async {
+    SoundHapticService.instance.playSelectionClick();
+    final selected = await MacroCalendarDialog.show(
+      context,
+      initialDate: _selectedDate,
+      datesWithTasks: _datesWithTasks,
+    );
+    if (selected != null && selected != _selectedDate) {
+      _handleDateChanged(selected);
+    }
+  }
+
+  /// 唤起个性化背景设置弹窗
+  void _showBackgroundThemeDialog() {
+    SoundHapticService.instance.playSelectionClick();
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: isDark ? AppTheme.cardDark : Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(AppTheme.radiusLarge)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  '个性化背景画报设置',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w700,
+                    color: isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  '支持选用本地精美壁纸，或使用默认唯美红裙舞台背景。',
+                  style: TextStyle(fontSize: 12.5, color: AppTheme.textSecondaryLight),
+                ),
+                const SizedBox(height: 16),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.purple.withOpacity(0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.photo_library_rounded, color: Colors.purple),
+                  ),
+                  title: Text(
+                    '从手机相册选择新背景',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight,
+                    ),
+                  ),
+                  subtitle: const Text('支持选择任意本地 JPG / PNG 图片'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _pickCustomBackground();
+                  },
+                ),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.12),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.restore_rounded, color: Colors.redAccent),
+                  ),
+                  title: Text(
+                    '恢复默认唯美背景',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight,
+                    ),
+                  ),
+                  subtitle: const Text('还原为默认红裙舞者唯美背景'),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _resetDefaultBackground();
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _pickCustomBackground() async {
+    try {
+      final res = await FilePicker.platform.pickFiles(type: FileType.image);
+      if (res != null && res.files.single.path != null) {
+        final path = res.files.single.path!;
+        await widget.repository.setCustomBackground(path);
+        setState(() => _customBgPath = path);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('✓ 已成功应用自定义背景图片')),
+          );
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _resetDefaultBackground() async {
+    await widget.repository.setCustomBackground(null);
+    setState(() => _customBgPath = null);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✓ 已恢复默认唯美舞台背景')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -222,189 +396,278 @@ class _TodayScreenState extends State<TodayScreen> {
     final activeCount = totalCount - completedCount;
     final isViewingToday = _selectedDate == _realTodayStr;
 
+    // 背景图选择：优先读取本地相册自定义图片，默认使用红裙舞台画报 (assets/images/default_bg.jpg)
+    Widget bgWidget;
+    if (_customBgPath != null && File(_customBgPath!).existsSync()) {
+      bgWidget = Image.file(
+        File(_customBgPath!),
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    } else {
+      bgWidget = Image.asset(
+        'assets/images/default_bg.jpg',
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    }
+
     return Scaffold(
       backgroundColor: isDark ? AppTheme.backgroundDark : AppTheme.backgroundLight,
-      body: SafeArea(
-        child: Column(
-          children: [
-            // 1. 顶部日期横向滑动胶囊轴 (定位任意一天)
-            DateTimelineStrip(
-              selectedDate: _selectedDate,
-              onSelectDate: _handleDateChanged,
-              datesWithTasks: _datesWithTasks,
-            ),
+      body: Stack(
+        children: [
+          // 1. 底层唯美大画报背景 (默认使用用户指定的红裙舞者画报)
+          Positioned.fill(child: bgWidget),
 
-            // 2. 状态主头部栏：日期、回到今天与重塑后的【灵感备忘箱】
-            Padding(
-              padding: const EdgeInsets.only(
-                left: AppTheme.spacing20,
-                right: AppTheme.spacing20,
-                top: 8,
-                bottom: 8,
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Row(
+          // 2. 磨砂半透明保护层 (保证日程文字具有极佳的可读性与对比度)
+          Positioned.fill(
+            child: Container(
+              color: (isDark ? const Color(0xFF0F172A) : Colors.white)
+                  .withOpacity(isDark ? 0.82 : 0.85),
+            ),
+          ),
+
+          // 3. 主界面内容交互层
+          SafeArea(
+            child: Column(
+              children: [
+                // 1. 顶部日期横向滑动胶囊轴 (定位任意一天)
+                DateTimelineStrip(
+                  selectedDate: _selectedDate,
+                  onSelectDate: _handleDateChanged,
+                  datesWithTasks: _datesWithTasks,
+                ),
+
+                // 2. 状态主头部栏：日期穿梭大盘入口、回到今天、换背景与【灵感备忘箱】
+                Padding(
+                  padding: const EdgeInsets.only(
+                    left: AppTheme.spacing20,
+                    right: AppTheme.spacing20,
+                    top: 8,
+                    bottom: 8,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      Text(
-                        _formatSelectedDisplayDate(_selectedDate),
-                        style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.4,
-                          color: primaryTextColor,
-                        ),
-                      ),
-                      if (!isViewingToday) ...[
-                        const SizedBox(width: 8),
-                        GestureDetector(
-                          onTap: () => _handleDateChanged(_realTodayStr),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
-                            decoration: BoxDecoration(
-                              color: primaryColor.withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.arrow_back_rounded, size: 12, color: primaryColor),
-                                const SizedBox(width: 2),
-                                Text(
-                                  '今天',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
+                      Row(
+                        children: [
+                          // 点击日期标题或日历小图标直接唤出【宏观年/月/日选择大盘】
+                          InkWell(
+                            onTap: _openMacroCalendar,
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 2),
+                              child: Row(
+                                children: [
+                                  Text(
+                                    _formatSelectedDisplayDate(_selectedDate),
+                                    style: TextStyle(
+                                      fontSize: 21,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: -0.4,
+                                      color: primaryTextColor,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    Icons.calendar_month_rounded,
+                                    size: 19,
                                     color: primaryColor,
                                   ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          if (!isViewingToday) ...[
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: () => _handleDateChanged(_realTodayStr),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
+                                decoration: BoxDecoration(
+                                  color: primaryColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-
-                  // 焕新图标：灵感备忘箱独立页面入口 (带紫罗兰优雅微底色)
-                  GestureDetector(
-                    onTap: () async {
-                      await Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => IdeaInboxScreen(repository: widget.repository),
-                        ),
-                      );
-                      _loadData();
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: isDark ? AppTheme.badgeIdeaBgDark : AppTheme.badgeIdeaBgLight,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.lightbulb_rounded,
-                            size: 16,
-                            color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            '灵感箱',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // 3. 核心流展示区 (向右顺划日期后移一天，左滑前移一天)
-            Expanded(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragEnd: (details) {
-                  final vel = details.primaryVelocity ?? 0;
-                  if (vel > 200) {
-                    // 向右顺划 -> 选中的日期向后移一天 (+1)
-                    _shiftDate(1);
-                  } else if (vel < -200) {
-                    // 左滑 -> 向前移一天 (-1)
-                    _shiftDate(-1);
-                  }
-                },
-                child: _isLoading
-                    ? const Center(child: CircularProgressIndicator.adaptive())
-                    : RefreshIndicator(
-                        onRefresh: () async => _loadData(),
-                        child: ListView(
-                        physics: const AlwaysScrollableScrollPhysics(
-                          parent: BouncingScrollPhysics(),
-                        ),
-                        padding: const EdgeInsets.only(bottom: 80),
-                        children: [
-                          // 3.1 今日心流节奏看板 (彻底击碎空白感)
-                          _buildRhythmCard(
-                            isDark,
-                            totalCount,
-                            completedCount,
-                            activeCount,
-                            isViewingToday,
-                          ),
-
-                          // 3.2 晨间温和结算卡片
-                          if (isViewingToday && _yesterdayPendingTasks.isNotEmpty)
-                            RolloverCardWidget(
-                              pendingCount: _yesterdayPendingTasks.length,
-                              onBatchPostpone: _handleBatchPostpone,
-                              onBatchArchive: _handleBatchArchive,
-                            ),
-
-                          // 3.3 空状态或时间流列表
-                          if (_currentDateTasks.isEmpty)
-                            _buildAestheticEmptyState(isDark)
-                          else ...[
-                            // 分组 1: 具体时钟点 (带左侧垂直时间轴光柱连接线)
-                            if (timedTasks.isNotEmpty) ...[
-                              _buildTimelineSectionHeader(
-                                '精确时刻安排 (${timedTasks.length})',
-                                Icons.access_time_filled_rounded,
-                                isDark ? AppTheme.badgeTimeDark : AppTheme.badgeTimeLight,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.arrow_back_rounded, size: 12, color: primaryColor),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      '今天',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: primaryColor,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
-                              _buildTaskGroup(timedTasks, cardColor, isDark),
-                              const SizedBox(height: AppTheme.spacing20),
-                            ],
-
-                            // 分组 2: 随时处理 (无具体时间)
-                            if (anytimeTasks.isNotEmpty) ...[
-                              _buildTimelineSectionHeader(
-                                '全天 / 随时从容推进 (${anytimeTasks.length})',
-                                Icons.all_inclusive_rounded,
-                                isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
-                              ),
-                              _buildTaskGroup(anytimeTasks, cardColor, isDark),
-                            ],
+                            ),
                           ],
                         ],
                       ),
-                    ),
-              ),
-            ),
 
-            // 4. 底部微质感录入悬浮唤起栏
-            _buildBottomCaptureBar(context, isDark),
-          ],
-        ),
+                      // 右侧快捷操作：换背景 + 灵感箱
+                      Row(
+                        children: [
+                          // 换背景快捷入口
+                          GestureDetector(
+                            onTap: _showBackgroundThemeDialog,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                              margin: const EdgeInsets.only(right: 6),
+                              decoration: BoxDecoration(
+                                color: (isDark ? Colors.white : Colors.black).withOpacity(0.06),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.palette_rounded,
+                                    size: 14,
+                                    color: isDark ? Colors.white70 : Colors.black87,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    '换背景',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: isDark ? Colors.white70 : Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+
+                          // 焕新图标：灵感备忘箱独立页面入口
+                          GestureDetector(
+                            onTap: () async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => IdeaInboxScreen(repository: widget.repository),
+                                ),
+                              );
+                              _loadData();
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: isDark ? AppTheme.badgeIdeaBgDark : AppTheme.badgeIdeaBgLight,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.lightbulb_rounded,
+                                    size: 16,
+                                    color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                    '灵感箱',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+
+                // 3. 核心流展示区 (向右顺划日期后移一天，左滑前移一天)
+                Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onHorizontalDragEnd: (details) {
+                      final vel = details.primaryVelocity ?? 0;
+                      if (vel > 200) {
+                        // 向右顺划 -> 选中的日期向后移一天 (+1)
+                        _shiftDate(1);
+                      } else if (vel < -200) {
+                        // 左滑 -> 向前移一天 (-1)
+                        _shiftDate(-1);
+                      }
+                    },
+                    child: _isLoading
+                        ? const Center(child: CircularProgressIndicator.adaptive())
+                        : RefreshIndicator(
+                            onRefresh: () async => _loadData(),
+                            child: ListView(
+                            physics: const AlwaysScrollableScrollPhysics(
+                              parent: BouncingScrollPhysics(),
+                            ),
+                            padding: const EdgeInsets.only(bottom: 80),
+                            children: [
+                              // 3.1 今日心流节奏看板 (彻底击碎空白感)
+                              _buildRhythmCard(
+                                isDark,
+                                totalCount,
+                                completedCount,
+                                activeCount,
+                                isViewingToday,
+                              ),
+
+                              // 3.2 晨间温和结算卡片
+                              if (isViewingToday && _yesterdayPendingTasks.isNotEmpty)
+                                RolloverCardWidget(
+                                  pendingCount: _yesterdayPendingTasks.length,
+                                  onBatchPostpone: _handleBatchPostpone,
+                                  onBatchArchive: _handleBatchArchive,
+                                ),
+
+                              // 3.3 空状态或时间流列表
+                              if (_currentDateTasks.isEmpty)
+                                _buildAestheticEmptyState(isDark)
+                              else ...[
+                                // 分组 1: 具体时钟点 (带左侧垂直时间轴光柱连接线)
+                                if (timedTasks.isNotEmpty) ...[
+                                  _buildTimelineSectionHeader(
+                                    '精确时刻安排 (${timedTasks.length})',
+                                    Icons.access_time_filled_rounded,
+                                    isDark ? AppTheme.badgeTimeDark : AppTheme.badgeTimeLight,
+                                  ),
+                                  _buildTaskGroup(timedTasks, cardColor, isDark),
+                                  const SizedBox(height: AppTheme.spacing20),
+                                ],
+
+                                // 分组 2: 随时处理 (无具体时间)
+                                if (anytimeTasks.isNotEmpty) ...[
+                                  _buildTimelineSectionHeader(
+                                    '全天 / 随时从容推进 (${anytimeTasks.length})',
+                                    Icons.all_inclusive_rounded,
+                                    isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
+                                  ),
+                                  _buildTaskGroup(anytimeTasks, cardColor, isDark),
+                                ],
+                              ],
+                            ],
+                          ),
+                        ),
+                  ),
+                ),
+
+                // 4. 底部微质感录入悬浮唤起栏
+                _buildBottomCaptureBar(context, isDark),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -546,6 +809,7 @@ class _TodayScreenState extends State<TodayScreen> {
               onToggleComplete: (val) => _handleToggleComplete(tasks[i].id, val),
               onTogglePause: (val) => _handleTogglePause(tasks[i].id, val),
               onDelete: () => _handleDeleteTask(tasks[i].id),
+              onSwipeDateShift: (delta) => _handleTaskSwipeShift(tasks[i], delta),
             ),
             if (i < tasks.length - 1)
               Divider(

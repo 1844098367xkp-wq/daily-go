@@ -28,6 +28,28 @@ jobs:
       - name: 补齐 Android 原生脚手架
         run: flutter create . --platforms=android
 
+      - name: 配置专属应用桌面图标 (使用用户指定头像)
+        run: |
+          python3 -c "
+          import os
+          from PIL import Image
+
+          src = Image.open('assets/images/app_icon.png')
+          densities = {
+              'mipmap-mdpi': 48,
+              'mipmap-hdpi': 72,
+              'mipmap-xhdpi': 96,
+              'mipmap-xxhdpi': 144,
+              'mipmap-xxxhdpi': 192,
+          }
+          for folder, size in densities.items():
+              dir_path = os.path.join('android/app/src/main/res', folder)
+              os.makedirs(dir_path, exist_ok=True)
+              out_file = os.path.join(dir_path, 'ic_launcher.png')
+              src.resize((size, size)).save(out_file, 'PNG')
+          print('=== 桌面图标已成功应用专属头像 ===')
+          " || true
+
       - name: 获取依赖
         run: flutter pub get
 

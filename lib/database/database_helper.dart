@@ -7,8 +7,9 @@ class DatabaseHelper {
   static final DatabaseHelper instance = DatabaseHelper._internal();
 
   static const String _dbName = 'daily_go_tasks.db';
-  static const int _dbVersion = 2; // 升级版本至 2
+  static const int _dbVersion = 3; // 升级版本至 3 (增加 app_settings 表)
   static const String tableName = 'tasks';
+  static const String settingsTable = 'app_settings';
 
   Database? _database;
 
@@ -53,7 +54,15 @@ class DatabaseHelper {
       )
     ''');
 
-    // 2. 核心复合索引
+    // 2. 创建通用配置表 (持久化自定义背景图片等设置)
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS $settingsTable (
+        key TEXT PRIMARY KEY NOT NULL,
+        value TEXT
+      )
+    ''');
+
+    // 3. 核心复合索引
     await db.execute('''
       CREATE INDEX IF NOT EXISTS idx_tasks_target_date_status 
       ON $tableName(target_date, status)
@@ -75,6 +84,46 @@ class DatabaseHelper {
         await db.execute('ALTER TABLE $tableName ADD COLUMN custom_sound_path TEXT');
       } catch (_) {}
     }
+    if (oldVersion < 3) {
+      try {
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS $settingsTable (
+            key TEXT PRIMARY KEY NOT NULL,
+            value TEXT
+          )
+        ''');
+      } catch (_) {}
+    }
+  }
+
+  Future<void> setSetting(String key, String? value) async {
+    final db = await database;
+    if (value == null) {
+      await db.delete(settingsTable, where: 'key = ?', whereArgs: [key]);
+    } else {
+      await db.insert(
+        settingsTable,
+        {'key': key, 'value': value},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+  }
+
+  Future<String?> getSetting(String key) async {
+    final db = await database;
+    try {
+      final res = await db.query(
+        settingsTable,
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: [key],
+        limit: 1,
+      );
+      if (res.isNotEmpty) {
+        return res.first['value'] as String?;
+      }
+    } catch (_) {}
+    return null;
   }
 
   Future<void> close() async {
