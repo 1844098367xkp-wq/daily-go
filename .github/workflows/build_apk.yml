@@ -31,7 +31,7 @@ jobs:
           # 统一配置 compileSdk 为 34, minSdk 为 21
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/g' android/app/build.gradle || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
-          # 针对 AGP 8+ 统一对齐 compileSdkVersion 34, 补齐第三方库 namespace, 并跳过 check*AarMetadata 约束
+          # 针对 AGP 8+ 统一对齐 compileSdkVersion 34 并补齐第三方库 namespace
           cat << 'EOF' >> android/build.gradle
           subprojects {
               afterEvaluate { project ->
@@ -43,11 +43,6 @@ jobs:
                           compileSdkVersion 34
                       }
                   }
-              }
-          }
-          allprojects {
-              tasks.matching { it.name.startsWith("check") && it.name.endsWith("AarMetadata") }.configureEach {
-                  enabled = false
               }
           }
           EOF
