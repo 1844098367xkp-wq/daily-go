@@ -1,0 +1,41 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # 支持在 GitHub 页面上一键手动点击触发
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 Java 17 环境
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 配置 Flutter 环境
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: 补齐 Android 原生脚手架
+        run: flutter create . --platforms=android
+
+      - name: 获取依赖
+        run: flutter pub get
+
+      - name: 构建发布版 APK (Release)
+        run: flutter build apk --release
+
+      - name: 上传 APK 构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-go-release-apk
+          path: build/app/outputs/flutter-apk/*.apk
