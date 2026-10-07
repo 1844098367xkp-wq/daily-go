@@ -25,12 +25,13 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 补齐 Android 原生脚手架与 AGP 8 兼容配置
+      - name: 补齐 Android 原生脚手架与 Gradle 兼容配置
         run: |
           flutter create . --platforms=android
-          # 确保 minSdk 至少为 21
+          # 统一配置 compileSdk 为 34, minSdk 为 21
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 34/g' android/app/build.gradle || true
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
-          # 针对 AGP 8+ 自动补齐第三方插件 namespace 并跳过 AarMetadata 版本冲突
+          # 针对 AGP 8+ 统一对齐 compileSdkVersion 34 并补齐第三方库 namespace
           cat << 'EOF' >> android/build.gradle
           subprojects {
               afterEvaluate { project ->
@@ -39,11 +40,9 @@ jobs:
                           if (namespace == null) {
                               namespace = project.group ?: "com.example.${project.name.replaceAll('-', '_')}"
                           }
+                          compileSdkVersion 34
                       }
                   }
-              }
-              tasks.matching { it.name.contains("AarMetadata") }.configureEach {
-                  enabled = false
               }
           }
           EOF
