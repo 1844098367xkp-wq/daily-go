@@ -8,10 +8,13 @@ enum TaskStatus {
   /// 已完成
   completed('COMPLETED'),
 
+  /// 已暂停（整条置灰半透明）
+  paused('PAUSED'),
+
   /// 已顺延（延期至未来）
   postponed('POSTPONED'),
 
-  /// 已归档/沉淀（移出主时间流）
+  /// 已归档/灵感箱（移出主时间流）
   archived('ARCHIVED');
 
   final String value;
@@ -115,6 +118,7 @@ class TaskModel {
   });
 
   bool get isCompleted => status == TaskStatus.completed;
+  bool get isPaused => status == TaskStatus.paused;
   bool get hasSpecificTime => timeSlot != null && timeSlot!.trim().isNotEmpty;
   bool get isHighFatigue => rolloverCount >= 3;
 

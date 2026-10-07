@@ -10,6 +10,7 @@ import '../widgets/rollover_card_widget.dart';
 import '../widgets/quick_capture_bottom_sheet.dart';
 import '../widgets/date_timeline_strip.dart';
 import '../widgets/alarm_dialog_widget.dart';
+import 'idea_inbox_screen.dart';
 
 /// 全局日程表主页面 (极美高质感重构)
 /// 彻底告别“首页空白”与“生硬图标”，重构沉淀箱为【灵感备忘与成就足迹】
@@ -125,6 +126,17 @@ class _TodayScreenState extends State<TodayScreen> {
     _loadData();
   }
 
+  /// 滑动手势切换日期：向右顺划 +1 天，左滑 -1 天
+  void _shiftDate(int dayDelta) {
+    try {
+      final parts = _selectedDate.split('-');
+      final current = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+      final target = current.add(Duration(days: dayDelta));
+      final newDateStr = TimeParserService.formatDate(target);
+      _handleDateChanged(newDateStr);
+    } catch (_) {}
+  }
+
   Future<void> _handleBatchPostpone() async {
     await widget.repository.batchPostponeYesterdayTasks(
       beforeDate: _realTodayStr,
@@ -178,19 +190,20 @@ class _TodayScreenState extends State<TodayScreen> {
     }
   }
 
-  Future<void> _handlePostponeToTomorrow(String taskId) async {
-    final tomorrow = DateTime.now().add(const Duration(days: 1));
-    final tomorrowStr = TimeParserService.formatDate(tomorrow);
-    await widget.repository.postponeTask(taskId, tomorrowStr);
+  Future<void> _handleTogglePause(String taskId, bool isPaused) async {
+    final taskIndex = _currentDateTasks.indexWhere((t) => t.id == taskId);
+    if (taskIndex == -1) return;
+    final task = _currentDateTasks[taskIndex];
+    final updated = task.copyWith(
+      status: isPaused ? TaskStatus.paused : TaskStatus.todo,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+    await widget.repository.updateTask(updated);
     await _loadData();
   }
 
-  Future<void> _handleArchiveSingle(String taskId) async {
-    final task = _currentDateTasks.firstWhere((t) => t.id == taskId);
-    await widget.repository.updateTask(task.copyWith(
-      status: TaskStatus.archived,
-      archivedAt: DateTime.now().millisecondsSinceEpoch,
-    ));
+  Future<void> _handleDeleteTask(String taskId) async {
+    await widget.repository.deleteTask(taskId);
     await _loadData();
   }
 
@@ -275,9 +288,16 @@ class _TodayScreenState extends State<TodayScreen> {
                     ],
                   ),
 
-                  // 焕新图标：灵感备忘箱入口 (带紫罗兰优雅微底色)
+                  // 焕新图标：灵感备忘箱独立页面入口 (带紫罗兰优雅微底色)
                   GestureDetector(
-                    onTap: () => _openIdeaInboxSheet(context),
+                    onTap: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => IdeaInboxScreen(repository: widget.repository),
+                        ),
+                      );
+                      _loadData();
+                    },
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                       decoration: BoxDecoration(
@@ -309,13 +329,25 @@ class _TodayScreenState extends State<TodayScreen> {
               ),
             ),
 
-            // 3. 核心流展示区
+            // 3. 核心流展示区 (向右顺划日期后移一天，左滑前移一天)
             Expanded(
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator.adaptive())
-                  : RefreshIndicator(
-                      onRefresh: () async => _loadData(),
-                      child: ListView(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragEnd: (details) {
+                  final vel = details.primaryVelocity ?? 0;
+                  if (vel > 200) {
+                    // 向右顺划 -> 选中的日期向后移一天 (+1)
+                    _shiftDate(1);
+                  } else if (vel < -200) {
+                    // 左滑 -> 向前移一天 (-1)
+                    _shiftDate(-1);
+                  }
+                },
+                child: _isLoading
+                    ? const Center(child: CircularProgressIndicator.adaptive())
+                    : RefreshIndicator(
+                        onRefresh: () async => _loadData(),
+                        child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(
                           parent: BouncingScrollPhysics(),
                         ),
@@ -366,6 +398,7 @@ class _TodayScreenState extends State<TodayScreen> {
                         ],
                       ),
                     ),
+              ),
             ),
 
             // 4. 底部微质感录入悬浮唤起栏
@@ -511,8 +544,8 @@ class _TodayScreenState extends State<TodayScreen> {
             TaskItemWidget(
               task: tasks[i],
               onToggleComplete: (val) => _handleToggleComplete(tasks[i].id, val),
-              onPostpone: () => _handlePostponeToTomorrow(tasks[i].id),
-              onArchive: () => _handleArchiveSingle(tasks[i].id),
+              onTogglePause: (val) => _handleTogglePause(tasks[i].id, val),
+              onDelete: () => _handleDeleteTask(tasks[i].id),
             ),
             if (i < tasks.length - 1)
               Divider(
@@ -650,158 +683,7 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  /// 重塑后的【灵感备忘箱 (Inbox & 历史回顾)】
-  void _openIdeaInboxSheet(BuildContext context) async {
-    final archived = await widget.repository.getArchivedTasks();
-    if (!mounted) return;
 
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        final isDark = Theme.of(ctx).brightness == Brightness.dark;
-        final sheetBg = isDark ? AppTheme.sheetDark : Colors.white;
-        final textColor = isDark ? Colors.white : const Color(0xFF0F172A);
-
-        return Container(
-          height: MediaQuery.of(ctx).size.height * 0.72,
-          decoration: BoxDecoration(
-            color: sheetBg,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(AppTheme.radiusLarge),
-              topRight: Radius.circular(AppTheme.radiusLarge),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 12),
-              Center(
-                child: Container(
-                  width: 36,
-                  height: 5,
-                  decoration: BoxDecoration(
-                    color: isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight,
-                    borderRadius: BorderRadius.circular(2.5),
-                  ),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: isDark ? AppTheme.badgeIdeaBgDark : AppTheme.badgeIdeaBgLight,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.lightbulb_rounded,
-                        size: 20,
-                        color: isDark ? AppTheme.badgeIdeaDark : AppTheme.badgeIdeaLight,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '灵感备忘箱 (待定池)',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            color: textColor,
-                          ),
-                        ),
-                        Text(
-                          '存放暂未想好具体日期的灵感，或多日未执行自动沉淀的事项',
-                          style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryLight),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              Divider(height: 1, color: Theme.of(ctx).dividerColor),
-              Expanded(
-                child: archived.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.inbox_rounded, size: 40, color: AppTheme.textSecondaryLight.withOpacity(0.5)),
-                            const SizedBox(height: 8),
-                            Text('灵感箱空空如也', style: TextStyle(color: AppTheme.textSecondaryLight, fontSize: 14)),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: archived.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 8),
-                        itemBuilder: (c, idx) {
-                          final t = archived[idx];
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: isDark ? const Color(0xFF131B2E) : const Color(0xFFF8FAFC),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        t.title,
-                                        style: TextStyle(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w500,
-                                          color: textColor,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Text(
-                                        '源自: ${t.targetDate} · 顺延 ${t.rolloverCount} 次',
-                                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryLight),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                ElevatedButton(
-                                  onPressed: () async {
-                                    await widget.repository.updateTask(t.copyWith(
-                                      targetDate: _selectedDate,
-                                      status: TaskStatus.todo,
-                                    ));
-                                    Navigator.pop(ctx);
-                                    _loadData();
-                                  },
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
-                                    foregroundColor: Colors.white,
-                                    elevation: 0,
-                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                    minimumSize: const Size(0, 32),
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                  ),
-                                  child: const Text('排入该日', style: TextStyle(fontSize: 12)),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
 
   String _formatSelectedDisplayDate(String dateStr) {
     try {
