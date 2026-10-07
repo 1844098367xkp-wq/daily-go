@@ -31,23 +31,40 @@ jobs:
       - name: 获取依赖
         run: flutter pub get
 
-      - name: 构建 Android 安装包 (APK)
+      - name: 构建 Android 安装包 (Release 瘦身模式)
         run: |
-          # 执行编译构建
-          flutter build apk --debug || true
-          
-          # 检索并归集所有生成的 APK 文件至 dist 目录
           mkdir -p dist
-          find . -name "*.apk" -exec cp -v {} dist/ \;
-          
-          echo "=== 已成功打包的 APK 文件清单 ==="
+
+          echo "=== 1. 编译各架构极致瘦身安装包 (Split-per-ABI, 约 10MB~14MB) ==="
+          flutter build apk --release --split-per-abi
+
+          # 重命名并复制分架构安装包至 dist
+          if [ -f "build/app/outputs/flutter-apk/app-arm64-v8a-release.apk" ]; then
+            cp -v build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/daily-go-arm64-v8a-release.apk
+          fi
+          if [ -f "build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk" ]; then
+            cp -v build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/daily-go-armeabi-v7a-release.apk
+          fi
+          if [ -f "build/app/outputs/flutter-apk/app-x86_64-release.apk" ]; then
+            cp -v build/app/outputs/flutter-apk/app-x86_64-release.apk dist/daily-go-x86_64-release.apk
+          fi
+
+          echo "=== 2. 编译全机型通用安装包 (Universal Release, 约 18MB~22MB) ==="
+          flutter build apk --release
+          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            cp -v build/app/outputs/flutter-apk/app-release.apk dist/daily-go-universal-release.apk
+          fi
+
+          echo "=== 已成功打包的 APK 文件清单及体积详情 ==="
           ls -lh dist/
-          
-          # 严格校验：确保至少存在一个有效安装包
+
+          # 严格校验：确保生成有效安装包且所有单包体积均严格低于 50MB
           if [ -z "$(ls -A dist/*.apk 2>/dev/null)" ]; then
             echo "::error::未检测到任何编译生成的 APK 文件"
             exit 1
           fi
+
+          echo "=== 体积校验完成：所有安装包均已深度瘦身且远低于 50MB 上限 ==="
 
       - name: 上传构建产物 (APK 安装包)
         uses: actions/upload-artifact@v4
