@@ -28,8 +28,7 @@ jobs:
       - name: 补齐 Android 原生脚手架与 AGP 8 兼容配置
         run: |
           flutter create . --platforms=android
-          # 升级 compileSdk 为 35, minSdk 为 21
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle || true
+          # 确保 minSdk 至少为 21
           sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/g' android/app/build.gradle || true
           # 针对 AGP 8+ 自动补齐第三方插件 namespace 并跳过 AarMetadata 版本冲突
           cat << 'EOF' >> android/build.gradle
@@ -40,7 +39,6 @@ jobs:
                           if (namespace == null) {
                               namespace = project.group ?: "com.example.${project.name.replaceAll('-', '_')}"
                           }
-                          compileSdkVersion 35
                       }
                   }
               }
