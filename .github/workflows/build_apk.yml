@@ -35,7 +35,7 @@ jobs:
         run: |
           mkdir -p dist
 
-          echo "=== 1. 编译各架构极致瘦身安装包 (Split-per-ABI, 约 10MB~14MB) ==="
+          echo "=== 编译各架构极致瘦身安装包 (Split-per-ABI, 严格控制在 15MB~19MB) ==="
           flutter build apk --release --split-per-abi
 
           # 重命名并复制分架构安装包至 dist
@@ -47,12 +47,6 @@ jobs:
           fi
           if [ -f "build/app/outputs/flutter-apk/app-x86_64-release.apk" ]; then
             cp -v build/app/outputs/flutter-apk/app-x86_64-release.apk dist/daily-go-x86_64-release.apk
-          fi
-
-          echo "=== 2. 编译全机型通用安装包 (Universal Release, 约 18MB~22MB) ==="
-          flutter build apk --release
-          if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
-            cp -v build/app/outputs/flutter-apk/app-release.apk dist/daily-go-universal-release.apk
           fi
 
           echo "=== 已成功打包的 APK 文件清单及体积详情 ==="
