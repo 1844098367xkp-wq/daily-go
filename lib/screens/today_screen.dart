@@ -1,16 +1,21 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../models/task_model.dart';
 import '../repositories/task_repository.dart';
 import '../services/time_parser_service.dart';
-import '../services/sound_haptic_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/task_item_widget.dart';
 import '../widgets/rollover_card_widget.dart';
 import '../widgets/quick_capture_bottom_sheet.dart';
+import '../widgets/date_timeline_strip.dart';
+import '../widgets/alarm_dialog_widget.dart';
 
-/// 今日聚焦主页面 (TodayScreen)
-/// 设计原则：首屏即聚焦、无多余 Tab、零认知负荷、沉浸感
+/// 全局日程表主页面 (ScheduleScreen / TodayScreen)
+/// 特性：
+/// 1. 顶部横向日期轴：支持自由定位到任意一天（昨天/今天/明天/未来）查看具体时间安排
+/// 2. 精确时间流：所有安排严格按具体时间点 (HH:mm:ss) 排序展示
+/// 3. 本地强力闹钟调度器：精确秒级触发循环音乐，弹窗要求手动关闭
 class TodayScreen extends StatefulWidget {
   final TaskRepository repository;
 
@@ -24,58 +29,139 @@ class TodayScreen extends StatefulWidget {
 }
 
 class _TodayScreenState extends State<TodayScreen> {
-  late String _todayStr;
-  List<TaskModel> _todayTasks = [];
+  late String _selectedDate; // 当前选中的查看日期 YYYY-MM-DD
+  late String _realTodayStr; // 真实的今天日期 YYYY-MM-DD
+
+  List<TaskModel> _currentDateTasks = [];
   List<TaskModel> _yesterdayPendingTasks = [];
+  Set<String> _datesWithTasks = {};
   bool _isLoading = true;
+
+  // 闹钟检测定时器 (秒级检测)
+  Timer? _alarmCheckTimer;
+  final Set<String> _triggeredAlarmTaskIds = {};
 
   @override
   void initState() {
     super.initState();
-    _refreshDateAndLoad();
+    _realTodayStr = TimeParserService.formatDate(DateTime.now());
+    _selectedDate = _realTodayStr;
+
+    _loadData();
+    _startAlarmDaemon();
   }
 
-  void _refreshDateAndLoad() {
-    _todayStr = TimeParserService.formatDate(DateTime.now());
-    _loadAllData();
+  @override
+  void dispose() {
+    _alarmCheckTimer?.cancel();
+    super.dispose();
   }
 
-  Future<void> _loadAllData() async {
+  /// 启动本地秒级闹钟守护检测器
+  void _startAlarmDaemon() {
+    _alarmCheckTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      _checkAndTriggerAlarms();
+    });
+  }
+
+  /// 检查是否有任务到达设定的具体时刻
+  Future<void> _checkAndTriggerAlarms() async {
+    final now = DateTime.now();
+    final todayStr = TimeParserService.formatDate(now);
+    final nowTimeStr = TimeParserService.formatTime(now.hour, now.minute, now.second);
+    final nowShortTimeStr = TimeParserService.formatTime(now.hour, now.minute);
+
+    // 仅在真实今天检查闹钟
+    for (final task in _currentDateTasks) {
+      if (task.targetDate == todayStr &&
+          !task.isCompleted &&
+          task.hasAlarm &&
+          task.timeSlot != null &&
+          !_triggeredAlarmTaskIds.contains(task.id)) {
+        // 支持精确到秒 (HH:mm:ss) 或 精确到分 (HH:mm)
+        final taskTime = task.timeSlot!;
+        final isMatch = (taskTime == nowTimeStr) ||
+            (taskTime.length == 5 && nowShortTimeStr == taskTime && now.second == 0);
+
+        if (isMatch) {
+          _triggeredAlarmTaskIds.add(task.id);
+          _popAlarmDialog(task);
+          break;
+        }
+      }
+    }
+  }
+
+  /// 弹出全屏呼吸闹钟卡片
+  void _popAlarmDialog(TaskModel task) {
+    if (!mounted) return;
+    AlarmDialogWidget.show(
+      context,
+      task: task,
+      onDismiss: () {
+        // 用户主动点击“关闭提醒”
+      },
+      onSnooze: () {
+        // 稍后 5 分钟提醒：5分钟后移除触发缓存
+        Timer(const Duration(minutes: 5), () {
+          _triggeredAlarmTaskIds.remove(task.id);
+        });
+      },
+    );
+  }
+
+  Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
-    final todayTasks = await widget.repository.getTasksForDate(_todayStr);
-    final pendingTasks = await widget.repository.getUnfinishedTasksBeforeDate(_todayStr);
+    final tasks = await widget.repository.getTasksForDate(_selectedDate);
+    final yesterdayPending = await widget.repository.getUnfinishedTasksBeforeDate(_realTodayStr);
+
+    // 扫描有任务的日期标记
+    final allUpcoming = await widget.repository.getTasksForDate(_selectedDate);
+    final datesSet = <String>{_selectedDate};
+    if (yesterdayPending.isNotEmpty) {
+      datesSet.add(yesterdayPending.first.targetDate);
+    }
 
     if (mounted) {
       setState(() {
-        _todayTasks = todayTasks;
-        _yesterdayPendingTasks = pendingTasks;
+        _currentDateTasks = tasks;
+        _yesterdayPendingTasks = yesterdayPending;
+        _datesWithTasks = datesSet;
         _isLoading = false;
       });
     }
   }
 
-  /// 晨间一键全部顺延至今日
+  void _handleDateChanged(String newDate) {
+    if (_selectedDate == newDate) return;
+    setState(() => _selectedDate = newDate);
+    _loadData();
+  }
+
+  /// 晨间一键顺延昨日未完成项至今天
   Future<void> _handleBatchPostpone() async {
     await widget.repository.batchPostponeYesterdayTasks(
-      beforeDate: _todayStr,
-      todayDate: _todayStr,
+      beforeDate: _realTodayStr,
+      todayDate: _realTodayStr,
     );
-    await _loadAllData();
+    await _loadData();
   }
 
   /// 晨间一键将昨日余项移入沉淀箱
   Future<void> _handleBatchArchive() async {
-    await widget.repository.batchArchiveYesterdayTasks(_todayStr);
-    await _loadAllData();
+    await widget.repository.batchArchiveYesterdayTasks(_realTodayStr);
+    await _loadData();
   }
 
-  /// 新建任务落库
+  /// 新建任务落库 (支持精确年月日时分秒、强闹钟与自定义音乐)
   Future<void> _handleCreateTask(
     String title,
     String targetDate,
     String? timeSlot,
     String rawInput,
+    bool hasAlarm,
+    String? customSoundPath,
   ) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final newTask = TaskModel(
@@ -85,25 +171,29 @@ class _TodayScreenState extends State<TodayScreen> {
       targetDate: targetDate,
       timeSlot: timeSlot,
       status: TaskStatus.todo,
+      hasAlarm: hasAlarm,
+      customSoundPath: customSoundPath,
       createdAt: now,
       updatedAt: now,
     );
 
     await widget.repository.createTask(newTask);
 
-    // 如果创建的是今天的任务，立即刷新列表
-    if (targetDate == _todayStr) {
-      await _loadAllData();
+    // 如果创建的日期正是当前浏览的日期，刷新视图
+    if (targetDate == _selectedDate) {
+      await _loadData();
+    } else {
+      // 切换到所创建日期的日程表
+      setState(() => _selectedDate = targetDate);
+      await _loadData();
     }
   }
 
-  /// 切换任务完成状态
   Future<void> _handleToggleComplete(String taskId, bool isCompleted) async {
     await widget.repository.toggleTaskCompletion(taskId, isCompleted);
-    // 静默刷新数据源
-    final updated = await widget.repository.getTasksForDate(_todayStr);
+    final updated = await widget.repository.getTasksForDate(_selectedDate);
     if (mounted) {
-      setState(() => _todayTasks = updated);
+      setState(() => _currentDateTasks = updated);
     }
   }
 
@@ -112,17 +202,17 @@ class _TodayScreenState extends State<TodayScreen> {
     final tomorrow = DateTime.now().add(const Duration(days: 1));
     final tomorrowStr = TimeParserService.formatDate(tomorrow);
     await widget.repository.postponeTask(taskId, tomorrowStr);
-    await _loadAllData();
+    await _loadData();
   }
 
   /// 单任务移入沉淀箱
   Future<void> _handleArchiveSingle(String taskId) async {
-    final task = _todayTasks.firstWhere((t) => t.id == taskId);
+    final task = _currentDateTasks.firstWhere((t) => t.id == taskId);
     await widget.repository.updateTask(task.copyWith(
       status: TaskStatus.archived,
       archivedAt: DateTime.now().millisecondsSinceEpoch,
     ));
-    await _loadAllData();
+    await _loadData();
   }
 
   @override
@@ -131,24 +221,32 @@ class _TodayScreenState extends State<TodayScreen> {
     final primaryTextColor = isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight;
     final secondaryTextColor = AppTheme.textSecondaryLight;
     final cardColor = isDark ? AppTheme.cardDark : AppTheme.cardLight;
+    final primaryColor = isDark ? AppTheme.primaryDark : AppTheme.primaryLight;
 
-    // 筛选具体时刻项与随时处理项
-    final timedTasks = _todayTasks.where((t) => t.hasSpecificTime).toList();
-    final anytimeTasks = _todayTasks.where((t) => !t.hasSpecificTime).toList();
-    final activeCount = _todayTasks.where((t) => !t.isCompleted).length;
+    final timedTasks = _currentDateTasks.where((t) => t.hasSpecificTime).toList();
+    final anytimeTasks = _currentDateTasks.where((t) => !t.hasSpecificTime).toList();
+    final activeCount = _currentDateTasks.where((t) => !t.isCompleted).length;
+    final isViewingToday = _selectedDate == _realTodayStr;
 
     return Scaffold(
       backgroundColor: isDark ? AppTheme.backgroundDark : AppTheme.backgroundLight,
       body: SafeArea(
         child: Column(
           children: [
-            // 1. 顶部大标题栏 (Header Area)
+            // 1. 顶部日期横向滑动胶囊轴 (定位任意一天)
+            DateTimelineStrip(
+              selectedDate: _selectedDate,
+              onSelectDate: _handleDateChanged,
+              datesWithTasks: _datesWithTasks,
+            ),
+
+            // 2. 所选日期标题栏
             Padding(
               padding: const EdgeInsets.only(
                 left: AppTheme.spacing20,
                 right: AppTheme.spacing20,
-                top: AppTheme.spacing16,
-                bottom: AppTheme.spacing12,
+                top: 8,
+                bottom: 8,
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -157,20 +255,45 @@ class _TodayScreenState extends State<TodayScreen> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        _formatDisplayDate(DateTime.now()),
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.5,
-                          color: primaryTextColor,
-                        ),
+                      Row(
+                        children: [
+                          Text(
+                            _formatSelectedDisplayDate(_selectedDate),
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.5,
+                              color: primaryTextColor,
+                            ),
+                          ),
+                          if (!isViewingToday) ...[
+                            const SizedBox(width: 8),
+                            GestureDetector(
+                              onTap: () => _handleDateChanged(_realTodayStr),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: primaryColor.withOpacity(0.12),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Text(
+                                  '回到今天',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                    color: primaryColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 3),
                       Text(
-                        activeCount > 0 ? '今日聚焦 $activeCount 项待办' : '今日已全部完成',
+                        activeCount > 0 ? '该日已规划 $activeCount 项待办' : '该日事项已全部搞定',
                         style: TextStyle(
-                          fontSize: 14,
+                          fontSize: 13,
                           fontWeight: FontWeight.w400,
                           color: secondaryTextColor,
                         ),
@@ -191,20 +314,20 @@ class _TodayScreenState extends State<TodayScreen> {
               ),
             ),
 
-            // 2. 核心任务流展示区
+            // 3. 核心任务流展示区 (按具体时间精确排序)
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator.adaptive())
                   : RefreshIndicator(
-                      onRefresh: () async => _loadAllData(),
+                      onRefresh: () async => _loadData(),
                       child: ListView(
                         physics: const AlwaysScrollableScrollPhysics(
                           parent: BouncingScrollPhysics(),
                         ),
                         padding: const EdgeInsets.only(bottom: 80),
                         children: [
-                          // 晨间温和结算卡片
-                          if (_yesterdayPendingTasks.isNotEmpty)
+                          // 仅在查看“今天”时展示晨间结算卡片
+                          if (isViewingToday && _yesterdayPendingTasks.isNotEmpty)
                             RolloverCardWidget(
                               pendingCount: _yesterdayPendingTasks.length,
                               onBatchPostpone: _handleBatchPostpone,
@@ -212,19 +335,19 @@ class _TodayScreenState extends State<TodayScreen> {
                             ),
 
                           // 空状态视图
-                          if (_todayTasks.isEmpty)
+                          if (_currentDateTasks.isEmpty)
                             _buildEmptyState(isDark)
                           else ...[
-                            // 分组 1: 具体时钟点
+                            // 分组 1: 具体时钟点 (按精确时间由早到晚展示)
                             if (timedTasks.isNotEmpty) ...[
-                              _buildSectionTitle('具体时间', secondaryTextColor),
+                              _buildSectionTitle('具体时间安排', secondaryTextColor),
                               _buildTaskGroup(timedTasks, cardColor),
                               const SizedBox(height: AppTheme.spacing16),
                             ],
 
-                            // 分组 2: 随时处理
+                            // 分组 2: 随时处理 (无具体时钟点)
                             if (anytimeTasks.isNotEmpty) ...[
-                              _buildSectionTitle('随时处理', secondaryTextColor),
+                              _buildSectionTitle('全天 / 随时处理', secondaryTextColor),
                               _buildTaskGroup(anytimeTasks, cardColor),
                             ],
                           ],
@@ -233,7 +356,7 @@ class _TodayScreenState extends State<TodayScreen> {
                     ),
             ),
 
-            // 3. 底部极简单行录入唤起栏 (Floating Capture Trigger)
+            // 4. 底部录入唤起栏 (点击打开支持智能提取与年月日时分秒的弹窗)
             _buildBottomCaptureBar(context, isDark),
           ],
         ),
@@ -292,6 +415,7 @@ class _TodayScreenState extends State<TodayScreen> {
   Widget _buildBottomCaptureBar(BuildContext context, bool isDark) {
     final barBg = isDark ? const Color(0xFF1C1C1E) : Colors.white;
     final hintColor = isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight;
+    final primaryColor = isDark ? AppTheme.primaryDark : AppTheme.primaryLight;
 
     return Container(
       padding: const EdgeInsets.symmetric(
@@ -312,6 +436,7 @@ class _TodayScreenState extends State<TodayScreen> {
         onTap: () {
           QuickCaptureBottomSheet.show(
             context,
+            defaultTargetDate: _selectedDate,
             onSubmit: _handleCreateTask,
           );
         },
@@ -327,16 +452,24 @@ class _TodayScreenState extends State<TodayScreen> {
               Icon(
                 Icons.add_rounded,
                 size: 20,
-                color: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
+                color: primaryColor,
               ),
               const SizedBox(width: AppTheme.spacing8),
-              Text(
-                '记录今天的事项或输入具体时间...',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: hintColor,
-                  fontWeight: FontWeight.w400,
+              Expanded(
+                child: Text(
+                  '添加安排，支持智能识别或精确到时分秒...',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: hintColor,
+                    fontWeight: FontWeight.w400,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
+              ),
+              Icon(
+                Icons.tune_rounded,
+                size: 16,
+                color: primaryColor,
               ),
             ],
           ),
@@ -352,13 +485,13 @@ class _TodayScreenState extends State<TodayScreen> {
         child: Column(
           children: [
             Icon(
-              Icons.done_all_rounded,
+              Icons.event_available_rounded,
               size: 48,
               color: isDark ? const Color(0xFF38383A) : const Color(0xFFE5E5EA),
             ),
             const SizedBox(height: AppTheme.spacing12),
             Text(
-              '今日待办已清空',
+              '该日期暂无日程安排',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w500,
@@ -367,7 +500,7 @@ class _TodayScreenState extends State<TodayScreen> {
             ),
             const SizedBox(height: 4),
             Text(
-              '从容专注于此刻的心流',
+              '点击下方栏目快速添加，可设置精确到秒的强闹钟',
               style: TextStyle(
                 fontSize: 13,
                 color: isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight,
@@ -428,18 +561,18 @@ class _TodayScreenState extends State<TodayScreen> {
                           final t = archived[idx];
                           return ListTile(
                             title: Text(t.title, style: const TextStyle(fontSize: 15)),
-                            subtitle: Text('原计划: ${t.targetDate} · 顺延 ${t.rolloverCount} 次',
+                            subtitle: Text('原计划: ${t.targetDate} ${t.timeSlot ?? ''} · 顺延 ${t.rolloverCount} 次',
                                 style: const TextStyle(fontSize: 12)),
                             trailing: TextButton(
                               onPressed: () async {
                                 await widget.repository.updateTask(t.copyWith(
-                                  targetDate: _todayStr,
+                                  targetDate: _selectedDate,
                                   status: TaskStatus.todo,
                                 ));
                                 Navigator.pop(ctx);
-                                _loadAllData();
+                                _loadData();
                               },
-                              child: const Text('移至今天'),
+                              child: const Text('移至该日'),
                             ),
                           );
                         },
@@ -452,11 +585,17 @@ class _TodayScreenState extends State<TodayScreen> {
     );
   }
 
-  String _formatDisplayDate(DateTime dt) {
-    const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
-    final m = dt.month;
-    final d = dt.day;
-    final w = weekdays[dt.weekday - 1];
-    return '$m月$d日 星期$w';
+  String _formatSelectedDisplayDate(String dateStr) {
+    try {
+      final parts = dateStr.split('-');
+      final dt = DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+      const weekdays = ['一', '二', '三', '四', '五', '六', '日'];
+      final m = dt.month;
+      final d = dt.day;
+      final w = weekdays[dt.weekday - 1];
+      return '$m月$d日 星期$w';
+    } catch (_) {
+      return dateStr;
+    }
   }
 }

@@ -29,6 +29,10 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+*.zip
+*.apk
+daily-go-apk/
+daily-go-apk.zip
 
 # Symbol processing related
 app.*.symbols

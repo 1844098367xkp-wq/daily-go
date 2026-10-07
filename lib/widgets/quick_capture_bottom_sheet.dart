@@ -2,30 +2,49 @@ import 'package:flutter/material.dart';
 import '../services/time_parser_service.dart';
 import '../services/sound_haptic_service.dart';
 import '../theme/app_theme.dart';
+import 'precise_time_picker_dialog.dart';
 
-/// 底部新建弹窗 (QuickCaptureBottomSheet)
-/// 特性：
-/// 1. 紧密贴合系统软键盘，拇指盲操体验
-/// 2. 键入时端侧实时提取时间（如“明天下午3点”）并以高亮胶囊展现
-/// 3. 快捷时间注入条：[今天] [明天] [后天]
-/// 4. 回车或确认键触发轻脆落库音效与微触感
+/// 底部快速新建弹窗 (升级版)
+/// 双轨合一：
+/// 1. 智能自然语言识别 (打字实时抽取年月日时分秒)
+/// 2. 显式精确时间设置入口 (可精确到年月日时分秒 + 循环强闹钟 + 本地音乐)
 class QuickCaptureBottomSheet extends StatefulWidget {
-  final Function(String title, String targetDate, String? timeSlot, String rawInput) onSubmit;
+  final String defaultTargetDate;
+  final Function(
+    String title,
+    String targetDate,
+    String? timeSlot,
+    String rawInput,
+    bool hasAlarm,
+    String? customSoundPath,
+  ) onSubmit;
 
   const QuickCaptureBottomSheet({
     super.key,
+    required this.defaultTargetDate,
     required this.onSubmit,
   });
 
   static Future<void> show(
     BuildContext context, {
-    required Function(String title, String targetDate, String? timeSlot, String rawInput) onSubmit,
+    required String defaultTargetDate,
+    required Function(
+      String title,
+      String targetDate,
+      String? timeSlot,
+      String rawInput,
+      bool hasAlarm,
+      String? customSoundPath,
+    ) onSubmit,
   }) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => QuickCaptureBottomSheet(onSubmit: onSubmit),
+      builder: (ctx) => QuickCaptureBottomSheet(
+        defaultTargetDate: defaultTargetDate,
+        onSubmit: onSubmit,
+      ),
     );
   }
 
@@ -40,11 +59,17 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
   ParsedTaskInput? _currentParsed;
   bool _ignoreAutoTime = false;
 
+  // 显式手动精确配置
+  late String _manualTargetDate;
+  String? _manualTimeSlot;
+  bool _hasAlarm = true;
+  String? _customSoundPath;
+
   @override
   void initState() {
     super.initState();
+    _manualTargetDate = widget.defaultTargetDate;
     _textController.addListener(_handleTextChanged);
-    // 打开时自动唤起键盘
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _focusNode.requestFocus();
     });
@@ -67,9 +92,51 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
 
     final parsed = TimeParserService.parse(text);
     if (parsed.hasExplicitTime) {
-      setState(() => _currentParsed = parsed);
+      setState(() {
+        _currentParsed = parsed;
+        _manualTargetDate = parsed.targetDate;
+        _manualTimeSlot = parsed.timeSlot;
+      });
     } else {
       setState(() => _currentParsed = null);
+    }
+  }
+
+  /// 呼出精确到年月日时分秒与本地音乐的弹窗
+  Future<void> _openPreciseTimePicker() async {
+    DateTime baseDt;
+    try {
+      final parts = _manualTargetDate.split('-');
+      final y = int.parse(parts[0]);
+      final m = int.parse(parts[1]);
+      final d = int.parse(parts[2]);
+      int h = 9, min = 0, s = 0;
+      if (_manualTimeSlot != null) {
+        final timeParts = _manualTimeSlot!.split(':');
+        h = int.parse(timeParts[0]);
+        min = int.parse(timeParts[1]);
+        if (timeParts.length > 2) s = int.parse(timeParts[2]);
+      }
+      baseDt = DateTime(y, m, d, h, min, s);
+    } catch (_) {
+      baseDt = DateTime.now();
+    }
+
+    final result = await PreciseTimePickerDialog.show(
+      context,
+      initialDateTime: baseDt,
+      initialHasAlarm: _hasAlarm,
+      initialSoundPath: _customSoundPath,
+    );
+
+    if (result != null) {
+      setState(() {
+        _manualTargetDate = result['targetDate'] as String;
+        _manualTimeSlot = result['timeSlot'] as String?;
+        _hasAlarm = (result['hasAlarm'] as bool?) ?? true;
+        _customSoundPath = result['customSoundPath'] as String?;
+        _ignoreAutoTime = true; // 用户显式微调后，优先使用手动设置
+      });
     }
   }
 
@@ -80,14 +147,15 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
     final parsed = _currentParsed ?? TimeParserService.parse(rawText);
     final finalTitle = parsed.title.isEmpty ? rawText : parsed.title;
 
-    // 触发落库微触感与机械咔哒音
     SoundHapticService.instance.playTaskCreated();
 
     widget.onSubmit(
       finalTitle,
-      parsed.targetDate,
-      parsed.timeSlot,
+      _manualTargetDate,
+      _manualTimeSlot,
       rawText,
+      _hasAlarm,
+      _customSoundPath,
     );
 
     Navigator.of(context).pop();
@@ -103,6 +171,8 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
       dateStr,
       null,
       rawText,
+      _hasAlarm,
+      _customSoundPath,
     );
     SoundHapticService.instance.playTaskCreated();
     Navigator.of(context).pop();
@@ -113,6 +183,7 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final sheetColor = isDark ? AppTheme.sheetDark : AppTheme.sheetLight;
     final primaryTextColor = isDark ? AppTheme.textPrimaryDark : AppTheme.textPrimaryLight;
+    final primaryColor = isDark ? AppTheme.primaryDark : AppTheme.primaryLight;
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Container(
@@ -137,7 +208,7 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 1. 顶部拖拽条 (Grabber: 36pt x 5pt)
+            // 1. 顶部拖拽条
             Center(
               child: Container(
                 margin: const EdgeInsets.only(top: 8, bottom: 8),
@@ -150,7 +221,7 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
               ),
             ),
 
-            // 2. 文本输入区 (单行可延展)
+            // 2. 文本输入区 (支持打字智能提取)
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppTheme.spacing20,
@@ -169,7 +240,7 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
                 textInputAction: TextInputAction.done,
                 onSubmitted: (_) => _submit(),
                 decoration: InputDecoration(
-                  hintText: '记录事项，支持如“明天下午3点 开会”...',
+                  hintText: '记录事项，支持如“明天14:30 方案评审”...',
                   hintStyle: TextStyle(
                     fontSize: 16,
                     color: isDark ? AppTheme.textPlaceholderDark : AppTheme.textPlaceholderLight,
@@ -181,69 +252,91 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
               ),
             ),
 
-            // 3. 动态时间识别高亮胶囊
-            if (_currentParsed != null)
-              Padding(
-                padding: const EdgeInsets.only(
-                  left: AppTheme.spacing20,
-                  right: AppTheme.spacing20,
-                  bottom: AppTheme.spacing8,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            // 3. 实时时间识别胶囊与精确时间微调按钮
+            Padding(
+              padding: const EdgeInsets.only(
+                left: AppTheme.spacing20,
+                right: AppTheme.spacing20,
+                bottom: AppTheme.spacing8,
+              ),
+              child: Row(
+                children: [
+                  // 时间标签胶囊 (不管是自动提取还是手动设置)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppTheme.primaryTintDark : AppTheme.primaryTintLight,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _hasAlarm ? Icons.alarm_on_rounded : Icons.calendar_today_rounded,
+                          size: 13,
+                          color: primaryColor,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$_manualTargetDate ${_manualTimeSlot ?? '(全天)'}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: primaryColor,
+                          ),
+                        ),
+                        if (_manualTimeSlot != null) ...[
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _manualTimeSlot = null;
+                                _ignoreAutoTime = true;
+                                _currentParsed = null;
+                              });
+                            },
+                            child: Icon(Icons.close_rounded, size: 14, color: primaryColor),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // 精确时间 (年月日时分秒) 入口
+                  GestureDetector(
+                    onTap: _openPreciseTimePicker,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: isDark ? AppTheme.primaryTintDark : AppTheme.primaryTintLight,
+                        color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFF2F2F7),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Icon(
-                            Icons.local_offer_rounded,
-                            size: 13,
-                            color: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
-                          ),
-                          const SizedBox(width: 4),
+                          Icon(Icons.tune_rounded, size: 13, color: AppTheme.textSecondaryLight),
+                          const SizedBox(width: 3),
                           Text(
-                            '${_currentParsed!.targetDate} ${_currentParsed!.timeSlot ?? ''}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
-                            ),
-                          ),
-                          const SizedBox(width: 4),
-                          // 点击取消时间解析
-                          GestureDetector(
-                            onTap: () {
-                              setState(() {
-                                _ignoreAutoTime = true;
-                                _currentParsed = null;
-                              });
-                            },
-                            child: Icon(
-                              Icons.close_rounded,
-                              size: 14,
-                              color: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
-                            ),
+                            '精确时分秒/音乐',
+                            style: TextStyle(fontSize: 11, color: AppTheme.textSecondaryLight),
                           ),
                         ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
+            ),
 
-            // 4. 分割线
             Divider(
               height: 1,
               thickness: 0.5,
               color: isDark ? AppTheme.separatorDark : AppTheme.separatorLight,
             ),
 
-            // 5. 键盘辅助条 (Accessory Bar: 快捷日期 + 确认提交)
+            // 4. 键盘辅助条 (快捷注入 + 提交)
             Padding(
               padding: const EdgeInsets.symmetric(
                 horizontal: AppTheme.spacing16,
@@ -259,10 +352,7 @@ class _QuickCaptureBottomSheetState extends State<QuickCaptureBottomSheet> {
                   const Spacer(),
                   IconButton(
                     onPressed: _submit,
-                    icon: Icon(
-                      Icons.arrow_upward_rounded,
-                      color: isDark ? AppTheme.primaryDark : AppTheme.primaryLight,
-                    ),
+                    icon: Icon(Icons.arrow_upward_rounded, color: primaryColor),
                     iconSize: 22,
                     padding: const EdgeInsets.all(6),
                     constraints: const BoxConstraints(),

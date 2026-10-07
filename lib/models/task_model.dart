@@ -2,7 +2,7 @@ import 'package:flutter/foundation.dart';
 
 /// 任务生命周期状态枚举
 enum TaskStatus {
-  /// 待办（当天计划中）
+  /// 待办（计划中）
   todo('TODO'),
 
   /// 已完成
@@ -27,13 +27,8 @@ enum TaskStatus {
 
 /// 基础重复规则枚举（轻量扩展）
 enum RecurrenceRule {
-  /// 单次不重复
   none('NONE'),
-
-  /// 每天重复
   daily('DAILY'),
-
-  /// 每个工作日重复 (周一至周五)
   weekday('WEEKDAY');
 
   final String value;
@@ -49,27 +44,28 @@ enum RecurrenceRule {
 }
 
 /// 《每日行》核心任务领域模型 (不可变实体)
+/// 支持年月日、精确时分秒 (HH:mm:ss)、循环强闹钟与本地自定义音乐
 @immutable
 class TaskModel {
-  /// 唯一标识 (UUID v4 / NanoID)
+  /// 唯一标识 (UUID v4)
   final String id;
 
   /// 任务标题（已清洗掉时间关键词）
   final String title;
 
-  /// 原始自然语言输入文本（用于回溯或调试）
+  /// 原始自然语言输入文本
   final String? rawInput;
 
   /// 目标计划日期 (格式: YYYY-MM-DD，如 '2026-10-08')
   final String targetDate;
 
-  /// 计划具体时刻 (格式: HH:mm，如 '14:30'，null 表示全天/随时处理)
+  /// 计划具体时刻 (精确至秒: HH:mm:ss 或 HH:mm，如 '14:30:00'，null 表示全天/随时处理)
   final String? timeSlot;
 
   /// 当前状态
   final TaskStatus status;
 
-  /// 优先级标记 (0: 普通, 1: 聚焦/置顶，UI 默认不强制暴露)
+  /// 优先级标记 (0: 普通, 1: 聚焦/置顶)
   final int priority;
 
   /// 重复规则
@@ -81,7 +77,13 @@ class TaskModel {
   /// 累计顺延次数（>=3 次提示拆解，>=7 次自动沉淀）
   final int rolloverCount;
 
-  /// 完成时间戳（毫秒，用于 650ms 延时折叠及历史回溯）
+  /// 是否启用强力到点闹钟 (循环播放音乐直到手动关闭)
+  final bool hasAlarm;
+
+  /// 自定义本地音乐/铃声路径 (为 null 则使用默认音乐)
+  final String? customSoundPath;
+
+  /// 完成时间戳（毫秒）
   final int? completedAt;
 
   /// 归档时间戳（毫秒）
@@ -104,22 +106,19 @@ class TaskModel {
     this.recurrenceRule = RecurrenceRule.none,
     this.sortOrder = 0,
     this.rolloverCount = 0,
+    this.hasAlarm = true,
+    this.customSoundPath,
     this.completedAt,
     this.archivedAt,
     required this.createdAt,
     required this.updatedAt,
   });
 
-  /// 是否为已完成状态
   bool get isCompleted => status == TaskStatus.completed;
-
-  /// 是否为定点任务 (有具体时分点)
   bool get hasSpecificTime => timeSlot != null && timeSlot!.trim().isNotEmpty;
-
-  /// 是否属于疲劳任务 (顺延次数过多)
   bool get isHighFatigue => rolloverCount >= 3;
 
-  /// 复制并更新部分属性 (不可变对象更新模式)
+  /// 复制并更新部分属性
   TaskModel copyWith({
     String? id,
     String? title,
@@ -131,6 +130,8 @@ class TaskModel {
     RecurrenceRule? recurrenceRule,
     int? sortOrder,
     int? rolloverCount,
+    bool? hasAlarm,
+    String? customSoundPath,
     int? completedAt,
     int? archivedAt,
     int? createdAt,
@@ -147,6 +148,8 @@ class TaskModel {
       recurrenceRule: recurrenceRule ?? this.recurrenceRule,
       sortOrder: sortOrder ?? this.sortOrder,
       rolloverCount: rolloverCount ?? this.rolloverCount,
+      hasAlarm: hasAlarm ?? this.hasAlarm,
+      customSoundPath: customSoundPath ?? this.customSoundPath,
       completedAt: completedAt ?? this.completedAt,
       archivedAt: archivedAt ?? this.archivedAt,
       createdAt: createdAt ?? this.createdAt,
@@ -167,6 +170,8 @@ class TaskModel {
       'recurrence_rule': recurrenceRule == RecurrenceRule.none ? null : recurrenceRule.value,
       'sort_order': sortOrder,
       'rollover_count': rolloverCount,
+      'has_alarm': hasAlarm ? 1 : 0,
+      'custom_sound_path': customSoundPath,
       'completed_at': completedAt,
       'archived_at': archivedAt,
       'created_at': createdAt,
@@ -187,6 +192,8 @@ class TaskModel {
       recurrenceRule: RecurrenceRule.fromString(map['recurrence_rule'] as String?),
       sortOrder: (map['sort_order'] as int?) ?? 0,
       rolloverCount: (map['rollover_count'] as int?) ?? 0,
+      hasAlarm: (map['has_alarm'] as int?) != 0,
+      customSoundPath: map['custom_sound_path'] as String?,
       completedAt: map['completed_at'] as int?,
       archivedAt: map['archived_at'] as int?,
       createdAt: map['created_at'] as int,
@@ -206,37 +213,29 @@ class TaskModel {
   int get hashCode => id.hashCode ^ updatedAt.hashCode;
 }
 
-/// 今日聚焦流多维加权排序比较器 (TaskComparator)
-/// 排序规则：
-/// 1. 完成状态：未完成在前，已完成沉底；
-/// 2. 优先级置顶：priority 降序 (1 > 0)；
-/// 3. 时间维度：有具体点位 (09:30) 排在前且按时钟升序，全天/随时排在后；
-/// 4. 自定义排序：sort_order 升序；
-/// 5. 创建时间：created_at 升序。
+/// 多维加权排序比较器 (TaskComparator)
+/// 支持精确至秒的字母序时间排序 (如 '09:30:00' < '09:30:15' < '14:00:00')
 class TaskComparator {
   static int compare(TaskModel a, TaskModel b) {
-    // 维度 1：完成状态权重 (未完成 = 0, 已完成 = 1)
+    // 维度 1：完成状态权重 (未完成优先)
     final aCompletedWeight = a.isCompleted ? 1 : 0;
     final bCompletedWeight = b.isCompleted ? 1 : 0;
     if (aCompletedWeight != bCompletedWeight) {
       return aCompletedWeight.compareTo(bCompletedWeight);
     }
 
-    // 维度 2：优先级/置顶权重 (高优在前)
+    // 维度 2：优先级/置顶权重
     if (a.priority != b.priority) {
       return b.priority.compareTo(a.priority);
     }
 
-    // 维度 3：定点时间权重
-    // 均有定点时间：按时间字符串字母序 (如 '09:30' < '14:00')
+    // 维度 3：定点时间权重 (按时分秒字典序升序)
     if (a.hasSpecificTime && b.hasSpecificTime) {
       final timeCompare = a.timeSlot!.compareTo(b.timeSlot!);
       if (timeCompare != 0) return timeCompare;
     } else if (a.hasSpecificTime && !b.hasSpecificTime) {
-      // a 有时间排在前面
       return -1;
     } else if (!a.hasSpecificTime && b.hasSpecificTime) {
-      // b 有时间排在前面
       return 1;
     }
 
