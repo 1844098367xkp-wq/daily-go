@@ -33,14 +33,21 @@ jobs:
 
       - name: 构建 Android 安装包 (APK)
         run: |
-          # 1. 构建保证可直接安装在手机上的标准 APK (Debug 签名包，零门槛安装)
-          flutter build apk --debug
-          # 2. 尝试构建 Release 版 (如已生成 release 包则一并打包)
+          flutter build apk --debug --verbose > build.log 2>&1 || {
+            echo "========== GRADLE BUILD FAILURE DETAILS =========="
+            grep -E "FAILURE|ERROR|Exception|error:|fatal:" build.log -B 2 -A 5 | head -n 100
+            echo "========== LAST 80 LINES OF BUILD LOG =========="
+            tail -n 80 build.log
+            exit 1
+          }
           flutter build apk --release --no-tree-shake-icons || true
 
-      - name: 上传 APK 构建产物
+      - name: 上传构建产物 (APK 与构建日志)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: daily-go-apk
-          path: build/**/*.apk
+          path: |
+            build/**/*.apk
+            build.log
+
