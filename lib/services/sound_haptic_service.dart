@@ -69,6 +69,11 @@ class SoundHapticService {
     }
   }
 
+  /// 4. 触发微选/点击 (Light 触碰反馈)
+  Future<void> playSelectionClick() async {
+    await HapticFeedback.selectionClick();
+  }
+
   // ==================== 强力闹钟循环播放与关闭 ====================
 
   /// 启动循环闹钟：音乐循环响铃，配合周期性脉冲振动，直到调用 stopAlarm()
