@@ -1,41 +1,22 @@
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/services.dart';
-import 'package:soundpool/soundpool.dart';
 
 /// 声音与触觉协同管理服务 (声触合一、低延迟单例)
+/// 采用官方活跃维护的 audioplayers，全面兼容 AGP 8 与现代移动架构
 class SoundHapticService {
   SoundHapticService._internal();
   static final SoundHapticService instance = SoundHapticService._internal();
 
-  Soundpool? _soundpool;
-  int? _soundCompleteId;
-  int? _soundCreateId;
-  int? _soundDeleteId;
+  AudioPlayer? _player;
   bool _isSoundEnabled = true;
 
-  /// 初始化并预加载音频资源到原生内存池
+  /// 初始化并配置低延迟音频播放器
   Future<void> init() async {
     try {
-      _soundpool = Soundpool.fromOptions(
-        options: const SoundpoolOptions(
-          maxStreams: 4,
-          streamType: StreamType.music,
-        ),
-      );
-
-      _soundCompleteId = await _loadSound('assets/sounds/task_complete.wav');
-      _soundCreateId = await _loadSound('assets/sounds/task_create.wav');
-      _soundDeleteId = await _loadSound('assets/sounds/task_delete.wav');
+      _player = AudioPlayer();
+      await _player?.setPlayerMode(PlayerMode.lowLatency);
     } catch (_) {
-      // 容错处理：若音频文件未配置或平台不支持，降级为纯触觉模式
-    }
-  }
-
-  Future<int?> _loadSound(String assetPath) async {
-    try {
-      final byteData = await rootBundle.load(assetPath);
-      return await _soundpool?.load(byteData);
-    } catch (_) {
-      return null;
+      // 容错降级：若平台音频服务不可用，平滑降级为纯触觉模式
     }
   }
 
@@ -43,24 +24,39 @@ class SoundHapticService {
   Future<void> playTaskCompleted() async {
     // 毫秒级触觉反馈
     await HapticFeedback.mediumImpact();
-    if (_isSoundEnabled && _soundCompleteId != null && _soundpool != null) {
-      await _soundpool!.play(_soundCompleteId!);
+    if (_isSoundEnabled && _player != null) {
+      try {
+        await _player!.play(
+          AssetSource('sounds/task_complete.wav'),
+          mode: PlayerMode.lowLatency,
+        );
+      } catch (_) {}
     }
   }
 
   /// 2. 触发新建任务 (Light 轻触 + 微动开关咔哒音)
   Future<void> playTaskCreated() async {
     await HapticFeedback.lightImpact();
-    if (_isSoundEnabled && _soundCreateId != null && _soundpool != null) {
-      await _soundpool!.play(_soundCreateId!);
+    if (_isSoundEnabled && _player != null) {
+      try {
+        await _player!.play(
+          AssetSource('sounds/task_create.wav'),
+          mode: PlayerMode.lowLatency,
+        );
+      } catch (_) {}
     }
   }
 
   /// 3. 触发撤销/删除 (Heavy/Rigid 微重感 + 柔和消散音)
   Future<void> playTaskDeleted() async {
     await HapticFeedback.heavyImpact();
-    if (_isSoundEnabled && _soundDeleteId != null && _soundpool != null) {
-      await _soundpool!.play(_soundDeleteId!);
+    if (_isSoundEnabled && _player != null) {
+      try {
+        await _player!.play(
+          AssetSource('sounds/task_delete.wav'),
+          mode: PlayerMode.lowLatency,
+        );
+      } catch (_) {}
     }
   }
 
@@ -71,6 +67,6 @@ class SoundHapticService {
 
   /// 释放资源
   void dispose() {
-    _soundpool?.dispose();
+    _player?.dispose();
   }
 }

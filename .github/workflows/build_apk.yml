@@ -14,7 +14,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: 配置 Java 17 环境
-        uses: actions/setup-java@v3
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -25,14 +25,29 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: 补齐 Android 原生脚手架
-        run: flutter create . --platforms=android
+      - name: 补齐 Android 原生脚手架与 Gradle 配置
+        run: |
+          flutter create . --platforms=android
+          # 注入 AGP 8+ namespace 兼容补丁，确保所有第三方库无缝通过编译
+          cat << 'EOF' >> android/build.gradle
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty('android')) {
+                      project.android {
+                          if (namespace == null) {
+                              namespace project.group
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
 
       - name: 获取依赖
         run: flutter pub get
 
       - name: 构建发布版 APK (Release)
-        run: flutter build apk --release
+        run: flutter build apk --release --no-tree-shake-icons
 
       - name: 上传 APK 构建产物
         uses: actions/upload-artifact@v4
